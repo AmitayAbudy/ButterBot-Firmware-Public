@@ -127,6 +127,15 @@ class ProbeResult:
         return None
 
 
+def select_port_in(box, var, device: str) -> bool:
+    """Selects device (e.g. COM7) in a port dropdown, if it's listed. True if it was."""
+    for label in box.cget("values"):
+        if label.split(" ", 1)[0] == device:
+            var.set(label)
+            return True
+    return False
+
+
 def list_ports() -> list[PortInfo]:
     ports = []
     for p in serial.tools.list_ports.comports():
@@ -705,6 +714,101 @@ def smart_write(port: str, plan: FlashPlan, baud: int, flash_bytes: int, keep_pa
 # ---------------------------------------------------------------------------------------------
 # After a flash: wait for the board to run the new firmware
 # ---------------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------
+# Flash worker: esptool runs one at a time inside a process (global state, redirected stdout), so flashing two
+# boards at once runs each flash in its own process - this program again, started with --flash-worker.
+# ---------------------------------------------------------------------------------------------
+
+_WORKER_FNS = ("backup", "write", "smart_write")
+
+
+def _worker_command(job: Path) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--flash-worker", str(job)]
+    here = str(Path(__file__).resolve().parent)
+    return [sys.executable, "-c",
+            f"import sys; sys.path.insert(0, {here!r}); import hopper_core; hopper_core.worker_main({str(job)!r})"]
+
+
+def run_in_worker(fn: str, kwargs: dict, on_line=lambda s: None, on_progress=lambda p: None):
+    """Runs backup / write / smart_write in a separate process and returns its result. Progress and esptool lines
+    come back through a small text file (a windowed exe's child has no usable stdout)."""
+    import pickle
+    import subprocess
+    import uuid
+    assert fn in _WORKER_FNS
+    jobs = APP_DIR / "jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    job = jobs / f"{uuid.uuid4().hex}.job"
+    out = job.with_suffix(".out")
+    job.write_bytes(pickle.dumps({"fn": fn, "kwargs": kwargs}))
+    out.write_text("", encoding="utf-8")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen(_worker_command(job), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, creationflags=flags)
+    result, error, pos, buf = None, None, 0, ""
+    try:
+        with open(out, "r", encoding="utf-8", errors="replace") as f:
+            while True:
+                chunk = f.read()
+                if chunk:
+                    buf += chunk
+                    *lines, buf = buf.split("\n")
+                    for line in lines:
+                        tag, _, rest = line.partition(" ")
+                        if tag == "L":
+                            on_line(rest)
+                        elif tag == "P":
+                            try:
+                                on_progress(int(rest))
+                            except ValueError:
+                                pass
+                        elif tag == "R":
+                            result = pickle.loads(bytes.fromhex(rest))
+                        elif tag == "E":
+                            error = rest
+                elif proc.poll() is not None:
+                    tail = f.read()
+                    if not tail:
+                        break
+                    buf += tail
+                    continue
+                else:
+                    time.sleep(0.1)
+    finally:
+        for p in (job, out):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    if error is not None:
+        kind, _, msg = error.partition(" ")
+        raise {"ImageError": ImageError, "OSError": OSError, "ValueError": ValueError}.get(kind, EsptoolError)(msg)
+    if proc.returncode != 0 and result is None:
+        raise EsptoolError(f"The flash worker stopped unexpectedly (exit code {proc.returncode})")
+    return result
+
+
+def worker_main(job_path: str) -> None:
+    """Entry point of a flash worker process: runs one job, writes L/P/R/E lines to <job>.out."""
+    import pickle
+    job = Path(job_path)
+    spec = pickle.loads(job.read_bytes())
+    with open(job.with_suffix(".out"), "a", encoding="utf-8", buffering=1) as out:
+        def line(s: str):
+            out.write("L " + s.replace("\n", " ").replace("\r", " ") + "\n")
+
+        def progress(p: int):
+            out.write(f"P {int(p)}\n")
+        try:
+            fn = globals()[spec["fn"]]
+            res = fn(**spec["kwargs"], on_line=line, on_progress=progress)
+            out.write("R " + pickle.dumps(res).hex() + "\n")
+        except Exception as e:  # noqa: BLE001 - reported to the app
+            msg = (str(e) or e.__class__.__name__).replace("\n", " ")
+            out.write(f"E {e.__class__.__name__} {msg}\n")
+
 
 def wait_for_boot(port: str, expect_version: str, timeout_s: float, cancel: Optional[threading.Event] = None,
                   on_wait: Callable[[str], None] = lambda s: None) -> DeviceStatus:

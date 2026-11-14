@@ -188,6 +188,27 @@ class Thinker:
                          {"role": "assistant", "content": json.dumps(reply)}]
         self.last_at = time.time()
 
+    def check_claude(self) -> None:
+        """Checks the saved key, the connection and the chosen model without a paid request (looking a model up is
+        free). Raises RuntimeError with a plain-language reason."""
+        import anthropic
+        key = load_api_key()
+        if not key:
+            raise RuntimeError("No Claude API key saved - add one in step 3, or switch to Ollama.")
+        client = anthropic.Anthropic(api_key=key, timeout=15.0, max_retries=1)
+        try:
+            client.models.retrieve(self.settings.claude_model)
+        except anthropic.AuthenticationError:
+            raise RuntimeError("Claude rejected the API key - check it in step 3.") from None
+        except anthropic.PermissionDeniedError:
+            raise RuntimeError("This API key can't use that model.") from None
+        except anthropic.NotFoundError:
+            raise RuntimeError(f"Model {self.settings.claude_model} not found for this key.") from None
+        except anthropic.APIConnectionError:
+            raise RuntimeError("Can't reach Claude - is the PC online?") from None
+        except anthropic.APIStatusError as e:
+            raise RuntimeError(f"Claude API error {e.status_code}: {e.message}") from None
+
     def prime(self) -> None:
         """Warms the model up with the real instructions (Ollama keeps an already-read prompt between calls).
         Not used for Claude: there it would cost a paid request, and its prompt cache warms on the first question."""
@@ -398,6 +419,7 @@ class BrainServer:
         self.settings = settings
         self.log_path = log_path            # one JSON line per conversation (timings included), or None
         self.ready = threading.Event()      # set once everything is loaded and primed
+        self.problem = ""                    # why warm-up failed ("" = it works)
         self.guide_path = guide_path
         self.on_event = on_event  # ("status", str) | ("turn", Turn) | ("error", str) | ("robot", ip)
         self.ears = Ears()
@@ -449,23 +471,37 @@ class BrainServer:
     def _warm_up(self):
         """Loads and primes everything before saying "ready", so the first question is as quick as the rest."""
         t0 = time.time()
+        self.problem = ""
         self.on_event("warming", True)
         try:
             self.ears.load(self.settings.whisper_model, lambda s: self.on_event("status", s), self.settings.whisper_source)
             self.on_event("status", "Warming up speech recognition…")
             self.ears.prime()
         except Exception as e:  # noqa: BLE001 - shown in the UI
-            self.on_event("error", f"Whisper failed to load: {e}")
-        if self.settings.provider == "ollama":
+            self.problem = f"Whisper failed to load: {e}"
+        if not self.problem and self.settings.provider == "ollama":
             self.on_event("status", f"Loading {self.settings.ollama_model} and reading ButterBot's instructions…")
             try:
                 self.thinker.prime()
             except Exception as e:  # noqa: BLE001
-                self.on_event("error", f"Couldn't warm up {self.settings.ollama_model} in Ollama: {e}")
+                self.problem = f"Couldn't warm up {self.settings.ollama_model} in Ollama: {e}"
+        elif not self.problem:
+            self.on_event("status", "Checking the Claude API key…")
+            try:
+                self.thinker.check_claude()
+            except Exception as e:  # noqa: BLE001
+                self.problem = str(e)
+        # ready = warm-up finished (questions waiting on it may go ahead); healthy() says whether it actually works
         self.ready.set()
         self.on_event("warming", False)
-        self.on_event("status", f"Brain ready on {local_ip()}:{TALK_PORT} - warmed up in {time.time() - t0:.0f} s. "
-                                "Talk to the robot.")
+        if self.problem:
+            self.on_event("error", f"The brain is running but can't answer yet: {self.problem}")
+        else:
+            self.on_event("status", f"Brain ready on {local_ip()}:{TALK_PORT} - warmed up in {time.time() - t0:.0f} s. "
+                                    "Talk to the robot.")
+
+    def healthy(self) -> bool:
+        return self.ready.is_set() and not self.problem
 
     # --- loops ---------------------------------------------------------------------------------
     def _discovery_loop(self):

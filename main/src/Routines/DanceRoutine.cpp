@@ -185,12 +185,14 @@ Routine::TickingState DanceRoutine::tick(float deltaTime){
 
 		const uint32_t duration = DanceMinMs + static_cast<uint32_t>(rand() % (DanceMaxMs - DanceMinMs + 1));
 		danceEndMs = millis() + duration;
+		plannedMs = duration;
 		CMF_LOG(DanceRoutine, LogLevel::Info, "Dance duration: %u ms", duration);
 
 		nextInterludeCheckMs = millis() + 3000;
 		pickRandomMove();
 		audioFrontend->loadModel();
-		startListeningForStop();
+		// Listening for "stop dancing" starts once the robot has finished talking (the Dancing phase checks):
+		// listening while it speaks let its own voice end the dance
 
 		phase = Phase::Dancing;
 		return TickingState::Continue;
@@ -220,7 +222,7 @@ Routine::TickingState DanceRoutine::tick(float deltaTime){
 			pickRandomMove();
 		}
 
-		if(!listeningForStop){
+		if(!listeningForStop && !audio->isPlaying()){
 			startListeningForStop();
 		}
 
@@ -232,9 +234,7 @@ Routine::TickingState DanceRoutine::tick(float deltaTime){
 				listeningForStop = false;
 				audioFrontend->setMode(AudioFrontend::Mode::Off);
 				playPhrase(Phrase::DanceInterlude, audio);
-				if(!interrupted && !stopVoiceDetected){
-					startListeningForStop();
-				}
+				// listening resumes above once the line has been spoken
 			}
 		}
 
@@ -259,28 +259,38 @@ Routine::TickingState DanceRoutine::tick(float deltaTime){
 		finished = true;
 
 		CMF_LOG(DanceRoutine, LogLevel::Info, "Dance ended, reason: %d", static_cast<int>(stopReason));
+		{
+			static constexpr const char* Reasons[] = { "natural", "voice", "interrupted" };
+			const uint32_t ranMs = (uint32_t) (millis() - (danceEndMs - plannedMs));
+			printf("[BBDANCE] event=end reason=%s cause=%s ran_ms=%lu planned_ms=%lu\n",
+				   Reasons[static_cast<uint8_t>(stopReason)], stopReason == StopReason::Interrupted ? interruptCause.load() : "-",
+				   (unsigned long) ranMs, (unsigned long) plannedMs);
+		}
 		return TickingState::Done;
 	}
 
 	return TickingState::Done;
 }
 
+void DanceRoutine::interrupt(const char* cause){
+	if(!interrupted.exchange(true)){
+		interruptCause = cause;
+	}
+}
+
 void DanceRoutine::onModuleEvent(uint8_t bus, Modules::Type type, ModuleService::Action action){
-	CMF_LOG(DanceRoutine, Debug, "got event Module");
-	interrupted = true;
+	interrupt("module");
 }
 
 void DanceRoutine::onCommand(Ctrl::Command command){
 	if(command == Ctrl::Command::Poke || command == Ctrl::Command::Listen){
-		CMF_LOG(DanceRoutine, Debug, "got event poke/listen");
-		interrupted = true;
+		interrupt(command == Ctrl::Command::Poke ? "poke" : "listen");
 	}
 }
 
 void DanceRoutine::onButtonEvent(int button, ISRButtonInput::Action action){
 	if(action == ISRButtonInput::Action::Press){
-		CMF_LOG(DanceRoutine, Debug, "got event btnPress");
-		interrupted = true;
+		interrupt("button");
 	}
 }
 
@@ -295,23 +305,26 @@ void DanceRoutine::onProximityReading(ProxState front, ProxState bottom){
 
 void DanceRoutine::onProximityChange(ProxSensor sensor, bool state){
 	if(ServiceLocator::SettingsInstance && ServiceLocator::SettingsInstance->get().bottomSensor == BottomSensorMode::On){
-		if((sensor == ProxSensor::Bottom && !state) || (sensor == ProxSensor::Front && state)){
-			interrupted = true;
+		if(sensor == ProxSensor::Bottom && !state){
+			interrupt("bottom_uncovered");
+		}else if(sensor == ProxSensor::Front && state){
+			interrupt("front_obstacle");
 		}
 	} else{
 		if(sensor == ProxSensor::Front && state){
-			CMF_LOG(DanceRoutine, Debug, "front obstacle");
-			interrupted = true;
+			interrupt("front_obstacle");
 		}
 	}
 }
 
 void DanceRoutine::onMotion(MotionType type){
-	interrupted = true;
+	static constexpr const char* Names[] = { "motion_fall", "motion_upside_down", "motion_pickup", "motion_shake" };
+	interrupt(static_cast<uint8_t>(type) < 4 ? Names[static_cast<uint8_t>(type)] : "motion");
 }
 
 void DanceRoutine::onStopPhrase(bool recognized, int index, const std::string& transcript, float confidence){
 	if(recognized && (index == 0 || index == -1)){
+		printf("[BBDANCE] event=heard_stop index=%d conf=%.2f transcript=%s\n", index, confidence, transcript.c_str());
 		stopVoiceDetected = true;
 	}
 	listeningForStop = false;

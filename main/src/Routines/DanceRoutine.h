@@ -62,6 +62,7 @@ private:
 	uint64_t proxDeadlineMs = 0;
 
 	uint64_t danceEndMs = 0;
+	uint32_t plannedMs = 0;
 	uint64_t moveEndMs = 0;
 	uint64_t nextInterludeCheckMs = 0;
 	uint8_t currentMoveIndex = 0;
@@ -70,6 +71,8 @@ private:
 	uint8_t lastPairIndex = 255;
 
 	std::atomic<bool> interrupted{ false };
+	std::atomic<const char*> interruptCause{ "" }; // Fork: what ended the dance early, printed as [BBDANCE]
+	void interrupt(const char* cause);
 	std::atomic<bool> stopVoiceDetected{ false };
 	std::atomic<bool> listeningForStop{ false };
 	std::atomic<bool> proxReadingReceived{ false };

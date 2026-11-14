@@ -130,9 +130,9 @@ class DiagnosticsTab(tk.Frame):
         link.port_box = ttk.Combobox(row, textvariable=link.port_var, state="readonly", style="Hop.TCombobox",
                                      width=30)
         link.port_box.pack(side="left", padx=(6, 4))
-        self.app.button(row, "⟳", self.refresh_ports, small=True).pack(side="left")
         link.btn = self.app.button(row, "Connect", lambda: self.toggle(link), small=True)
         link.btn.pack(side="left", padx=6)
+        self.app.scan_button(row, p["PANEL"])
         link.state_lbl = tk.Label(panel, text="Not connected", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8),
                                   anchor="w")
         link.state_lbl.pack(fill="x", padx=12, pady=(2, 0))
@@ -641,6 +641,11 @@ class DiagnosticsTab(tk.Frame):
             match = next((l for l in labels if l.split(" ", 1)[0] == port), "") if port else ""
             if match:
                 link.port_var.set(match)
+
+    def use_port(self, kind: str, device: str):
+        link = self.links.get(kind)
+        if link is not None and link.port_box is not None and link.session is None:
+            core.select_port_in(link.port_box, link.port_var, device)
 
     def toggle(self, link: "_Link"):
         if link.session is not None:

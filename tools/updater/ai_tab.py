@@ -53,7 +53,8 @@ Your WiFi password is stored on the robot, not on this PC."""
 
 class Lamp:
     """A status dot plus a word, so a step never looks 'on' just because its dot has a colour."""
-    WORDS = {"ok": "READY", "warn": "TO DO", "bad": "PROBLEM", "busy": "WORKING…", "": "NOT SET UP"}
+    WORDS = {"ok": "READY", "warn": "TO DO", "bad": "PROBLEM", "busy": "WORKING…", "": "NOT SET UP",
+             "unchecked": "NOT CHECKED"}
 
     def __init__(self, parent, pal):
         self.pal = pal
@@ -63,7 +64,8 @@ class Lamp:
 
     def set(self, state: str):
         p = self.pal
-        colour = {"ok": p["GREEN"], "warn": p["WARN"], "bad": p["BAD"], "busy": p["TEAL"]}.get(state)
+        colour = {"ok": p["GREEN"], "warn": p["WARN"], "bad": p["BAD"], "busy": p["TEAL"],
+                  "unchecked": p["DIM"]}.get(state)
         # Only READY is a filled dot; anything else is an outline in its colour
         self.cv.itemconfigure(self.dot, fill=colour if state == "ok" else p["PANEL_HI"], outline=colour or p["EDGE"],
                               width=1 if state == "ok" else 2)
@@ -76,6 +78,7 @@ class AITab(tk.Frame):
         self.pal, self.app = pal, app
         self.cfg = app.cfg
         self.server: brain.BrainServer | None = None
+        self._robot_lock = threading.Lock()
         p = pal
 
         top = tk.Frame(self, bg=p["BG"])
@@ -91,9 +94,9 @@ class AITab(tk.Frame):
         self.port_var = tk.StringVar()
         self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=40)
         self.port_box.pack(side="left", padx=(8, 6))
-        app.button(row, "⟳", self.refresh_ports, small=True).pack(side="left")
+        app.scan_button(row, p["BG"])
         tk.Label(row, text="(only for steps 1 and 4 - the brain itself works over WiFi)", bg=p["BG"], fg=p["DIM"],
-                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+                 font=("Segoe UI", 8)).pack(side="right", padx=8)
 
         # Step 1 (WiFi) sits on its own at the top and gates the rest: without it the robot can't reach the brain
         wifi_row = tk.Frame(self, bg=p["BG"])
@@ -131,10 +134,17 @@ class AITab(tk.Frame):
             # Set up before: step 1 starts as READY (the robot keeps its WiFi), then gets re-checked if it's plugged in
             ssid = self.cfg.get("ai_ssid", "")
             self._say(self.wifi_status, self.wifi_lamp,
-                      f"Set up earlier{f' ({ssid})' if ssid else ''}. Plug the robot in to check it again.", "ok")
-        self.after(1200, self._quiet_robot_check)
+                      f"Set up earlier{f' ({ssid})' if ssid else ''}. Plug the robot in to check it again.",
+                      "unchecked")
+        # The robot check waits for the app's startup scan (startup_scan_done), so it uses the robot's real port
         if self.cfg.get("ai_autostart") and self.cfg.get("ai_wifi_ok"):
             self.after(800, self.start_brain)
+
+    def _robot_cmd_locked(self, port, cmd, tag, timeout_s=4.0):
+        """One robot command at a time from this tab. At startup the brain's "ai on" and the WiFi check used to open
+        the port at the same moment; the loser failed silently and the robot stayed in its brain-offline pause."""
+        with self._robot_lock:
+            return core.console_command(port, cmd, tag, timeout_s=timeout_s)
 
     def _quiet_robot_check(self):
         """App just opened. If the robot is plugged in: read its settings and, if it has WiFi saved, test it (join the
@@ -144,7 +154,7 @@ class AITab(tk.Frame):
             return
 
         def work():
-            r = core.console_command(port, "wifi", "BBWIFI", 4)
+            r = self._robot_cmd_locked(port, "wifi", "BBWIFI", 4)
             if not r or core.port_problem(r, port) or "ai" not in r:
                 return  # not the robot on that port, switched off, or busy - stay quiet
             configured = r.get("configured") == "1"
@@ -164,7 +174,7 @@ class AITab(tk.Frame):
             self.app.ui(show_settings)
             if configured:
                 self._push_brain_address(port)
-                t = core.console_command(port, "wifi test", "BBWIFI", timeout_s=25)
+                t = self._robot_cmd_locked(port, "wifi test", "BBWIFI", timeout_s=25)
                 self._deliver(t, port, self._test_result)
         threading.Thread(target=work, daemon=True).start()
 
@@ -312,7 +322,7 @@ class AITab(tk.Frame):
             return
 
         def work():
-            r = core.console_command(port, cmd, tag, timeout_s=timeout)
+            r = self._robot_cmd_locked(port, cmd, tag, timeout_s=timeout)
             self._deliver(r, port, done, status)
         threading.Thread(target=work, daemon=True).start()
 
@@ -329,7 +339,7 @@ class AITab(tk.Frame):
         """Tells the robot this PC's address, so it finds the brain even across sub-networks (worker thread)."""
         ip = brain.local_ip()
         try:
-            r = core.console_command(port, f"brain {ip} {brain.TALK_PORT}", "BBWIFI", 4)
+            r = self._robot_cmd_locked(port, f"brain {ip} {brain.TALK_PORT}", "BBWIFI", 4)
         except Exception:  # noqa: BLE001 - the broadcast search still works on simple networks
             r = None
         if r and r.get("brain") == ip:
@@ -411,7 +421,7 @@ class AITab(tk.Frame):
 
         def work():
             self._push_brain_address(port)
-            r = core.console_command(port, "wifi test", "BBWIFI", timeout_s=20)
+            r = self._robot_cmd_locked(port, "wifi test", "BBWIFI", timeout_s=20)
             self._deliver(r, port, self._test_result)
         threading.Thread(target=work, daemon=True).start()
 
@@ -627,9 +637,10 @@ class AITab(tk.Frame):
         if claude:
             has = bool(brain.load_api_key())
             self._say(self.think_status, self.think_lamp,
-                      "API key saved (in Windows Credential Manager)." if has else
+                      "API key saved (in Windows Credential Manager). Checked when the brain starts, or hit Try it."
+                      if has else
                       "Paste an API key from console.anthropic.com and hit Save. Pay-as-you-go; a chat costs a "
-                      "fraction of a cent. Opus is the smartest; Haiku answers fastest.", "ok" if has else "warn")
+                      "fraction of a cent. Opus is the smartest; Haiku answers fastest.", "unchecked" if has else "warn")
         else:
             self._say(self.think_status, self.think_lamp, "Free and private, but needs a reasonably fast PC. Install "
                       "Ollama, run  ollama pull llama3.2  once, then hit Check.", "")
@@ -748,8 +759,10 @@ class AITab(tk.Frame):
 
     def _show_state(self):
         running = bool(self.server and self.server.running)
-        ready = running and self.server.ready.is_set()
-        brain_txt = "ready" if ready else ("warming up…" if running else "stopped")
+        ready = running and self.server.healthy()
+        broken = running and self.server.ready.is_set() and not ready
+        brain_txt = "ready" if ready else ("not working - see step 4" if broken else
+                                           ("warming up…" if running else "stopped"))
         if self.robot_ai is None:
             robot_txt = "plug it in to check its AI setting"
         else:
@@ -796,7 +809,7 @@ class AITab(tk.Frame):
         def work():
             if on:
                 self._push_brain_address(port)
-            r = core.console_command(port, "ai on" if on else "ai off", "BBWIFI", 4)
+            r = self._robot_cmd_locked(port, "ai on" if on else "ai off", "BBWIFI", 4)
             problem = core.port_problem(r, port)
             if problem:
                 if not quiet:
@@ -852,7 +865,8 @@ class AITab(tk.Frame):
         if kind == "status":
             running = bool(self.server and self.server.running)
             # READY only once warm-up has finished; until then the step shows WORKING…
-            state = ("ok" if self.server.ready.is_set() else "busy") if running else ""
+            state = (("ok" if self.server.healthy() else "bad") if self.server.ready.is_set() else "busy") \
+                if running else ""
             self._say(self.run_status, self.run_lamp, str(value), state)
             self._show_state()
             if "Whisper" in str(value):
@@ -864,6 +878,12 @@ class AITab(tk.Frame):
                           "busy")
         elif kind == "error":
             self._say(self.run_status, self.run_lamp, str(value), "bad")
+            self._show_state()
+            prob = self.server.problem if self.server else ""
+            if prob.startswith("Whisper"):
+                self._say(self.hear_status, self.hear_lamp, prob, "bad")
+            elif prob:
+                self._say(self.think_status, self.think_lamp, prob, "bad")
         elif kind == "robot":
             self.run_status.configure(text=f"Brain running on {brain.local_ip()}:{brain.TALK_PORT} · robot seen at {value}")
         elif kind == "turn":
@@ -896,12 +916,19 @@ class AITab(tk.Frame):
 
     # --- misc ---------------------------------------------------------------------------------------------
     def refresh_ports(self):
-        ports = core.list_ports()
-        self.port_box.configure(values=[pt.label() for pt in ports])
-        if not self.port_var.get():
-            usb = [pt for pt in ports if pt.is_usb]
-            if usb:
-                self.port_var.set(usb[0].label())
+        # No guessing: the first USB port is often the controller. The app's scan fills in the robot (use_port).
+        self.port_box.configure(values=[pt.label() for pt in core.list_ports()])
+
+    def use_port(self, kind: str, device: str):
+        if kind == "bot":
+            core.select_port_in(self.port_box, self.port_var, device)
+
+    def startup_scan_done(self):
+        """The app's startup scan finished: check the robot's WiFi, and if the brain already started, make sure the
+        robot has AI mode on and this PC's address (a robot that said "brain offline" earlier stays paused otherwise)."""
+        self._quiet_robot_check()
+        if self.server and self.server.running and self.robot_ai_var.get():
+            self.set_ai(True, quiet=True)
 
     def shutdown(self):
         if self.server and self.server.running:

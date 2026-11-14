@@ -53,11 +53,11 @@ class ConsoleTab(tk.Frame):
         self.port_var = tk.StringVar()
         self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=46)
         self.port_box.pack(side="left", padx=(8, 6))
-        app.button(row, "⟳", self.refresh_ports, small=True).pack(side="left")
         self.connect_btn = app.button(row, "Connect", self.toggle)
         self.connect_btn.pack(side="left", padx=8)
         self.state_lbl = tk.Label(row, text="Not connected", bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 9))
         self.state_lbl.pack(side="left", padx=6)
+        app.scan_button(row, p["BG"])
         app.button(row, "Save log…", self.save, small=True).pack(side="right")
         app.button(row, "Clear", self.clear, small=True).pack(side="right", padx=6)
 
@@ -130,6 +130,14 @@ class ConsoleTab(tk.Frame):
             usb = [pt for pt in ports if pt.is_usb]
             if usb:
                 self.port_var.set(usb[0].label())
+
+    def use_port(self, kind: str, device: str):
+        # The console talks to either board: follow the robot, unless a session is open or nothing better is known
+        if self.open_port:
+            return
+        cur = self.port()
+        if not cur or cur not in {pt.device for pt in core.list_ports()} or kind == "bot":
+            core.select_port_in(self.port_box, self.port_var, device)
 
     def port(self) -> str:
         return self.port_var.get().split(" ", 1)[0]

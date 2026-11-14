@@ -50,7 +50,7 @@ class PersonalizeTab(tk.Frame):
         self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=40)
         self.port_box.pack(side="left", padx=(8, 6))
         self.port_box.bind("<<ComboboxSelected>>", lambda e: self.read_voice())
-        app.button(row, "Find robot", self.find_robot, small=True).pack(side="left")
+        app.button(row, "⟳ Scan", self.find_robot, small=True).pack(side="left")
         self.port_lbl = tk.Label(row, text="Plug the robot in by USB and switch it on.", bg=p["BG"], fg=p["DIM"],
                                  font=("Segoe UI", 8))
         self.port_lbl.pack(side="left", padx=8)
@@ -94,12 +94,18 @@ class PersonalizeTab(tk.Frame):
         # The first time the tab is opened, find the robot by itself
         if not self._looked and not self.port_var.get():
             self._looked = True
-            self.find_robot()
+            self.find_robot(probe_silent=False)  # just listen: opening a tab shouldn't reset a board
 
     # --- ports ----------------------------------------------------------------------------------------------
     def refresh_ports(self):
         ports = core.list_ports()
         self.port_box.configure(values=[pt.label() for pt in ports])
+
+    def use_port(self, kind: str, device: str):
+        if kind == "bot":
+            changed = self.port_var.get().split(" ", 1)[0] != device
+            if core.select_port_in(self.port_box, self.port_var, device) and changed and self.winfo_ismapped():
+                self.read_voice()
 
     def _port(self) -> str | None:
         port = self.port_var.get().split(" ", 1)[0]
@@ -110,31 +116,21 @@ class PersonalizeTab(tk.Frame):
             return None
         return port
 
-    def find_robot(self):
-        self.refresh_ports()
-        held = self.app.held_ports()
-        ports = [pt for pt in core.list_ports() if pt.is_usb and pt.device not in held]
-        if not ports:
-            self.port_lbl.configure(text="No free USB boards found. Is the robot plugged in and on?", fg=self.pal["WARN"])
+    def find_robot(self, probe_silent: bool = True):
+        """The app's shared scan: whatever it finds also fills the other tabs' port lists."""
+        if self.app.busy:
+            self.port_lbl.configure(text="Busy - try again when the current job is done.", fg=self.pal["WARN"])
             return
         self.port_lbl.configure(text="Looking for the robot (a few seconds)…", fg=self.pal["DIM"])
+        self.app.run_scan(probe_silent=probe_silent, on_done=self._found)
 
-        def work():
-            found = None
-            for pt in ports:
-                if core.read_status(pt.device, timeout_s=6.5).kind == "bot":
-                    found = pt
-                    break
-            self.app.ui(lambda: self._found(found))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _found(self, pt):
-        if pt is None:
+    def _found(self, found: dict):
+        device = found.get("bot")
+        if not device:
             self.port_lbl.configure(text="No robot answered. Switch it on (hold the button ~1 s) and try again.",
                                     fg=self.pal["WARN"])
             return
-        self.port_var.set(pt.label())
-        self.port_lbl.configure(text="Robot found.", fg=self.pal["GREEN"])
+        self.port_lbl.configure(text=f"Robot found on {device}.", fg=self.pal["GREEN"])
         self.read_voice()
 
     # --- voice ------------------------------------------------------------------------------------------------

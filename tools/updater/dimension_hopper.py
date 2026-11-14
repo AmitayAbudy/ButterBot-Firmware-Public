@@ -31,7 +31,7 @@ import tooltip
 from hopper_core import Kind
 
 APP_TITLE = "Dimension Hopper"
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 
 # --- palette: portal-fluid green on lab-floor black --------------------------------------
 BG = "#070b08"
@@ -503,6 +503,8 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.busy = False
         self.monitor_ports: set[str] = set()  # ports held open by the Diagnostics tab (robot and controller)
+        self.known_ports: dict[str, str] = {}  # what a scan found: Kind.BOT / Kind.CTRL -> "COM7"
+        self.scan_labels: list[tk.Label] = []  # the small "found …" note next to every tab's Scan button
 
         root.title(f"{APP_TITLE} {VERSION}")
         root.configure(bg=BG)
@@ -590,6 +592,9 @@ class App:
         self.refresh_ports(auto_assign=True)
         for s in self.slots.values():
             s.refresh_release()
+        # A quiet scan at startup (listen only, never resets a board), so every tab - the AI tab above all - knows
+        # which port is the robot before it talks to it
+        root.after(300, lambda: self.run_scan(probe_silent=False, on_done=lambda found: self.ai_tab.startup_scan_done()))
         root.protocol("WM_DELETE_WINDOW", self._close)
         self.parked: set[str] = set()
 
@@ -698,16 +703,70 @@ class App:
             self.log(f"USB serial ports: {', '.join(p.device for p in usb)}. Hit Scan to see what's on them.")
         return ports
 
-    def run_scan(self):
+    # --- shared port scan: every tab's Scan button lands here -------------------------------------------------
+    def scan_button(self, parent, bg: str):
+        """A Scan button plus a short note, for any tab with a port dropdown."""
+        self.button(parent, "⟳ Scan", self.run_scan, small=True).pack(side="left")
+        lbl = tk.Label(parent, text="", bg=bg, fg=DIM, font=("Segoe UI", 8))
+        lbl.pack(side="left", padx=(6, 0))
+        self.scan_labels.append(lbl)
+        return lbl
+
+    def _scan_note(self, text: str, color=DIM):
+        for lbl in self.scan_labels:
+            lbl.configure(text=text, fg=color)
+
+    def port_found(self, kind: str, device: str):
+        """A board was identified on a port: every dropdown for that board switches to it."""
+        if kind not in self.slots or not device:
+            return
+        self.known_ports[kind] = device
+        self.slots[kind].select_port(device)
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab):
+            tab.use_port(kind, device)
+
+    def _refresh_all_ports(self) -> list[core.PortInfo]:
         ports = self.refresh_ports()
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab):
+            tab.refresh_ports()
+        for kind, device in self.known_ports.items():
+            if any(p.device == device for p in ports):
+                self.port_found(kind, device)
+        return ports
+
+    def run_scan(self, probe_silent: bool = True, on_done=None):
+        """Finds which board is on which port and fills every tab's dropdowns. probe_silent: boards that don't print a
+        status line (stock firmware, or not running) get the bootloader probe, which resets them; the startup scan
+        only listens."""
+        if self.busy:
+            self._scan_note("Busy - try again when the current job is done.", WARN)
+            return
+        ports = self._refresh_all_ports()
+        # Ports open in the Diagnostics tab already know what's on them
+        for link in getattr(self.diag_tab, "links", {}).values():
+            if link.session is not None and link.dev in self.slots:
+                self.port_found(link.dev, link.port)
         esp = [p for p in ports if p.is_usb and p.device not in self.held_ports()]  # skip ports open in other tabs
         if not esp:
             self.headline.configure(text="No USB serial boards found. Is the robot ON? Hold its power button ~2 s.", fg=WARN)
             self.log("No USB serial devices found. The robot's USB only appears while it's powered on "
                      "(hold the power button ~2 s), and the cable must carry data.", "warn")
+            self._scan_note("No boards found - is the robot on?", WARN)
+            if on_done:
+                on_done({})
             return
         self.headline.configure(text=quip("probe"), fg=DIM)
         self.log(f"{quip('scan')} found {', '.join(p.device for p in esp)}")
+        self._scan_note("Scanning (a few seconds)…")
+        found_kinds: dict[str, str] = {}
+
+        def finish():
+            if found_kinds:
+                self._scan_note("  ·  ".join(f"{Kind.LABEL[k]} on {d}" for k, d in sorted(found_kinds.items())), GREEN)
+            else:
+                self._scan_note("No board answered. Switch the robot on (hold its button ~1 s) and scan again.", WARN)
+            if on_done:
+                on_done(dict(found_kinds))
 
         def work():
             # 1. Listen first: fork firmware says who it is every 5 s ([BBSTAT] dev=bot|ctrl). That doesn't reset
@@ -730,9 +789,14 @@ class App:
                     continue
                 self.tlog(f"{p.device}: {Kind.LABEL[st.kind]} - {st.summary()}", "hi")
                 slot = self.slots[st.kind]
-                self.ui(lambda s=slot, st=st: (s.select_port(st.port), s.show_status(st)))
+                found_kinds[st.kind] = st.port
+                self.ui(lambda s=slot, st=st: (self.port_found(st.kind, st.port), s.show_status(st)))
 
             # 2. Anything silent (stock firmware, or not running) gets the bootloader probe
+            if not probe_silent and unknown:
+                self.tlog(f"{', '.join(p.device for p in unknown)}: no status line - hit Scan to probe "
+                          f"{'it' if len(unknown) == 1 else 'them'}.")
+                unknown = []
             for p in unknown:
                 self.tlog(f"{p.device} is silent - probing it in bootloader mode…")
                 r = core.probe(p.device, self.cfg["baud"])
@@ -743,13 +807,15 @@ class App:
                           f"-> {Kind.LABEL.get(r.kind or '', 'unknown')}", "hi")
                 if r.kind in self.slots:
                     slot = self.slots[r.kind]
-                    self.ui(lambda s=slot, r=r: (s.select_port(r.port), self._note_probe(r), s.show_probe(r)))
+                    found_kinds[r.kind] = r.port
+                    self.ui(lambda s=slot, r=r: (self.port_found(r.kind, r.port), self._note_probe(r), s.show_probe(r)))
                 else:
                     self.ui(lambda r=r: self._note_probe(r))
             self.ui(lambda: self.headline.configure(
                 text=("Scan complete. The robot is parked in bootloader mode (it won't pair) until you beam "
                       "or hit Wake." if self.parked else "Scan complete - pick payloads and beam."),
                 fg=WARN if self.parked else DIM))
+            self.ui(finish)
         self.job("Scan", work)
 
     # --- themed dialogs (replace tkinter.messagebox) ------------------------------------------------
@@ -914,18 +980,48 @@ class App:
         opts = dict(keep=bool(self.keep_var.get()), quick=bool(self.quick_var.get()))
 
         def work():
-            ok = 0
-            for s in chosen:
-                if self._update_one(s, backup_first, **opts):
-                    ok += 1
+            # Two boards: flash both at the same time (each in its own worker process, on its own port).
+            # One board failing doesn't stop the other.
+            results: dict[str, bool] = {}
+            if len(chosen) > 1:
+                self.tlog("Updating both at the same time.", "hi")
+
+                def one(s):
+                    try:
+                        results[s.kind] = self._update_one(s, backup_first, parallel=True, **opts)
+                    except Exception as e:  # noqa: BLE001
+                        self.tlog(f"[{Kind.LABEL[s.kind]}] {e}", "bad")
+                        results[s.kind] = False
+                threads = [threading.Thread(target=one, args=(s,), daemon=True) for s in chosen]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                failed = [Kind.LABEL[k] for k, good in results.items() if not good]
+                if failed:
+                    self.tlog(f"Done - {' and '.join(failed)} didn't finish; see {'its' if len(failed) == 1 else 'their'} "
+                              "panel.", "bad")
+                else:
+                    self.tlog("Both updated ✔", "hi")
+            else:
+                for s in chosen:
+                    results[s.kind] = self._update_one(s, backup_first, **opts)
+            ok = sum(results.values())
             done = ok == len(chosen)
             self.ui(lambda: (self.portal.flash(LIME if done else BAD),
                              self.headline.configure(text=quip("done") if done else quip("fail"),
                                                      fg=GREEN if done else BAD)))
         self.job("Update", work)
 
-    def _update_one(self, s: DeviceSlot, backup_first: bool, keep: bool = True, quick: bool = True) -> bool:
+    def _update_one(self, s: DeviceSlot, backup_first: bool, keep: bool = True, quick: bool = True,
+                    parallel: bool = False) -> bool:
         name, port, baud = Kind.LABEL[s.kind], s.port(), self.cfg["baud"]
+
+        def flash_op(fn: str, **kw):
+            """Backups and writes: in a worker process when the other board is being flashed at the same time."""
+            if parallel:
+                return core.run_in_worker(fn, kw, kw.pop("on_line"), kw.pop("on_progress"))
+            return getattr(core, fn)(**kw)
 
         def status(text, color=DIM, pct=None):
             self.ui(lambda: s.set_status(text, color, pct))
@@ -970,7 +1066,8 @@ class App:
                 status(quip("backup"))
                 self.tlog(f"[{name}] backing up {r.flash_bytes // core.MiB} MB…")
                 self.ui(lambda: self._set_parked(port, True))  # backup leaves it in the bootloader
-                bk = core.backup(port, r.flash_bytes, s.kind, baud, lambda l: None, prog(15, 35))
+                bk = flash_op("backup", port=port, flash_bytes=r.flash_bytes, target=s.kind, baud=baud,
+                              on_line=lambda l: None, on_progress=prog(15, 35))
                 self.tlog(f"[{name}] backup saved: {bk}", "hi")
 
             # 4. flash + verify
@@ -978,7 +1075,8 @@ class App:
             show = lambda l: self.tlog(f"[{name}] {l}") if ("Hash of data" in l or "Wrote" in l) else None  # noqa: E731
             bar = prog(50 if backup_first else 15, 50 if backup_first else 85)
             if keep or quick:
-                st = core.smart_write(port, plan, baud, r.flash_bytes, keep, show, bar, compare=quick)
+                st = flash_op("smart_write", port=port, plan=plan, baud=baud, flash_bytes=r.flash_bytes,
+                              keep_pairing=keep, on_line=show, on_progress=bar, compare=quick)
                 saved = "" if not quick else (
                     f" Wrote {st.written / core.MiB:.1f} of {st.total / core.MiB:.1f} MB - the rest was already there."
                     if st.written < st.total else "")
@@ -986,7 +1084,7 @@ class App:
                           + (" Pairing and settings kept." if st.kept_nvs else "")
                           + (f" Note: {st.note}." if st.note else ""), "hi")
             else:
-                core.write(port, plan, baud, show, bar)
+                flash_op("write", port=port, plan=plan, baud=baud, on_line=show, on_progress=bar)
             self.ui(lambda: self._set_parked(port, False))  # the write ends with a hard reset
 
             # 5. wait for it to run the new firmware, and check it's the version we wrote
@@ -1181,6 +1279,9 @@ def _selftest(out: str):
 
 
 def main():
+    if "--flash-worker" in sys.argv:  # a flash running in its own process (Update both flashes both at once)
+        core.worker_main(sys.argv[sys.argv.index("--flash-worker") + 1])
+        return
     if "--selftest" in sys.argv:
         _selftest(sys.argv[sys.argv.index("--selftest") + 1])
         return
