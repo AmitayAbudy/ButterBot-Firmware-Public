@@ -61,6 +61,8 @@ and Announcer (with echo). Chosen in Dimension Hopper's *Personalize* tab and sa
 - Front-sensor debouncing so a single false reading doesn't stop the robot.
 - Drive the robot from the PC (Dimension Hopper's *Diagnostics* tab) - it refuses to drive forward into an obstacle or
   off an edge, and stops by itself if the app or cable goes away.
+- An emulated controller in Dimension Hopper (*Controller* tab), over USB or Bluetooth: the robot answers it like its
+  hardware controller, and drives with its stick while idle (no RC mode needed).
 
 ### Sturdier
 - No more crashes when the controller connects (internal memory ran out), when a setting is saved over USB, or on an
@@ -71,8 +73,9 @@ and Announcer (with echo). Chosen in Dimension Hopper's *Personalize* tab and sa
 
 ### USB console (used by Dimension Hopper)
 A status line every 5 seconds (battery, charging, controller link, free memory, why it last restarted, boot count), a
-live diagnostics stream, and commands for driving, voices, WiFi setup, network scan, AI mode, pairing and memory/speed
-diagnostics. The protocol is plain text, so any serial terminal works too.
+live diagnostics stream, and commands for driving, voices, WiFi setup, network scan, AI mode, pairing, the emulated
+controller (`emu on`, `ctrl <hex>`) and memory/speed diagnostics (`tasks`, `heaps`; the status line reports the real
+lowest free memory and any failed allocations). The protocol is plain text, so any serial terminal works too.
 
 ## Problems and ideas
 

@@ -24,6 +24,7 @@ import hopper_core as core
 from guide_tab import GuideTab
 from diag_tab import DiagnosticsTab
 from console_tab import ConsoleTab
+from controller_tab import ControllerTab
 from ai_tab import AITab
 from personalize_tab import PersonalizeTab
 from hop_dialog import HopDialog
@@ -31,7 +32,7 @@ import tooltip
 from hopper_core import Kind
 
 APP_TITLE = "Dimension Hopper"
-VERSION = "1.2.6"
+VERSION = "1.3.0"
 
 # --- palette: portal-fluid green on lab-floor black --------------------------------------
 BG = "#070b08"
@@ -537,6 +538,8 @@ class App:
         nb.add(self.personalize_tab, text="  Personalize  ")
         self.diag_tab = DiagnosticsTab(nb, pal, self)
         nb.add(self.diag_tab, text="  Diagnostics  ")
+        self.controller_tab = ControllerTab(nb, pal, self)
+        nb.add(self.controller_tab, text="  Controller  ")
         self.console_tab = ConsoleTab(nb, pal, self)
         nb.add(self.console_tab, text="  Console  ")
         self.ai_tab = AITab(nb, pal, self)
@@ -722,12 +725,12 @@ class App:
             return
         self.known_ports[kind] = device
         self.slots[kind].select_port(device)
-        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab):
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab, self.controller_tab):
             tab.use_port(kind, device)
 
     def _refresh_all_ports(self) -> list[core.PortInfo]:
         ports = self.refresh_ports()
-        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab):
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab, self.controller_tab):
             tab.refresh_ports()
         for kind, device in self.known_ports.items():
             if any(p.device == device for p in ports):
@@ -1214,6 +1217,7 @@ class App:
     def _close(self):
         self.diag_tab.shutdown()
         self.console_tab.shutdown()
+        self.controller_tab.shutdown()
         self.ai_tab.shutdown()
         if self.busy and not self.confirm(
                 "Flash in progress", "Quitting now can leave the board half-written. It stays recoverable over USB, "
@@ -1242,7 +1246,8 @@ def tooltip_gaps() -> list[str]:
     """Button labels in the source with no tooltip (empty in the packaged exe, which has no .py sources)."""
     import re
     labels = set()
-    for f in ("dimension_hopper.py", "ai_tab.py", "diag_tab.py", "console_tab.py", "personalize_tab.py"):
+    for f in ("dimension_hopper.py", "ai_tab.py", "diag_tab.py", "console_tab.py", "personalize_tab.py",
+              "controller_tab.py"):
         p = Path(__file__).with_name(f)
         if p.exists():
             labels |= set(re.findall(r'button\([^,]+, *"([^"]+)"', p.read_text(encoding="utf-8")))
@@ -1275,6 +1280,12 @@ def _selftest(out: str):
                      f"{len(brain.load_actions(Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / 'guide_data.json'))} actions")
     except Exception as e:  # noqa: BLE001
         lines.append(f"ai: MISSING {e!r}")
+    import controller_link
+    lines.append(f"bluetooth: {controller_link.bluetooth_available()}")
+    try:  # Update both runs flashes in worker processes (this exe again, with --flash-worker)
+        core.run_in_worker("backup", dict(port="COM250", flash_bytes=4 * core.MiB, target="ctrl", baud=921600))
+    except Exception as e:  # noqa: BLE001 - an error about COM250 means the worker ran
+        lines.append(f"flash worker: {type(e).__name__} {str(e)[:50]}")
     Path(out).write_text("\n".join(lines), encoding="utf-8")
 
 

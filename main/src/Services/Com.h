@@ -3,6 +3,10 @@
 
 
 #include "BLE/Server.h"
+#include <atomic>
+#include <string>
+#include <span>
+#include <vector>
 #include <BBData.h>
 #include <CtrlData.h>
 #include <Scenarios.h>
@@ -21,6 +25,14 @@ public:
 	OnConnStatus OnConnStatus{ this };
 
 	ConnStatus getStatus() const;
+
+	/**
+	 * Fork: Dimension Hopper's emulated controller over USB. While mirroring, everything sent to the controller is
+	 * also printed as "[BBCOM] d=<hex>", and inject() handles a controller message that came in over the console.
+	 */
+	static inline std::atomic<bool> mirrorToConsole{ false };
+	void inject(const std::vector<uint8_t>& buf);
+	bool controllerPresent() const { return status == ConnStatus::Connected || mirrorToConsole; }
 
 	DECLARE_EVENT(OnCommand, Com, Ctrl::Command);
 	OnCommand OnCommand{ this };
@@ -78,6 +90,7 @@ public:
 
 protected:
 	void tick(float deltaTime) noexcept override;
+	void handle(std::span<const uint8_t> buf);
 
 private:
 	// Service UUID

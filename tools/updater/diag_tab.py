@@ -12,6 +12,7 @@ from tkinter import ttk
 
 import hopper_core as core
 import tooltip
+from stick_widget import KEYS as STICK_KEYS, Stick, mix
 
 STALE_S = 2.0  # no [BBDIAG] for this long -> "waiting for data"
 
@@ -170,38 +171,30 @@ class DiagnosticsTab(tk.Frame):
         return f
 
     # --- driving over USB -------------------------------------------------------------------------------
-    # Hold an arrow (or arrow keys / WASD while this tab is open) and the app sends "drive <left> <right>"
+    # Push the stick (drag it, or arrow keys / WASD while this tab is open) and the app sends "drive <left> <right>"
     # every SEND_MS; the robot stops by itself 400 ms after the last one, so a dropped cable can't run it away.
     SEND_MS = 150
-    KEYS = {"Up": "up", "w": "up", "Down": "down", "s": "down", "Left": "left", "a": "left", "Right": "right",
-            "d": "right"}
 
     def _build_drive(self, parent):
         p = self.pal
         box = tk.Frame(parent, bg=p["PANEL"])
         box.pack(fill="x", padx=12, pady=(0, 10))
         tk.Label(box, text="DRIVE", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).grid(
-            row=0, column=0, columnspan=3, sticky="w")
-        self.drive_btns = {}
-        for name, glyph, r, c in (("up", "▲", 1, 1), ("left", "◀", 2, 0), ("stop", "■", 2, 1), ("right", "▶", 2, 2),
-                                  ("down", "▼", 3, 1)):
-            b = tk.Button(box, text=glyph, width=4, bg=p["PANEL_HI"], fg=p["LIME"], activebackground=p["GREEN"],
-                          activeforeground=p["BG"], relief="flat", bd=0, cursor="hand2",
-                          font=("Segoe UI Black", 14), highlightthickness=1, highlightbackground=p["EDGE"])
-            b.grid(row=r, column=c, padx=2, pady=2, ipady=2)
-            if name == "stop":
-                b.configure(command=lambda: self._drive_stop(), fg=p["BAD"])
-            else:
-                b.bind("<ButtonPress-1>", lambda e, n=name: self._drive_start(n))
-                b.bind("<ButtonRelease-1>", lambda e: self._drive_stop())
-            tooltip.Tooltip(b, "Stop the motors." if name == "stop" else
-                            f"Hold to drive {'forward' if name == 'up' else 'backward' if name == 'down' else 'turning ' + name}"
-                            " (or use the arrow keys / WASD). Lets go = stops.")
-            self.drive_btns[name] = b
+            row=0, column=0, columnspan=2, sticky="w")
+        cv = tk.Canvas(box, width=150, height=150, bg=p["PANEL"], highlightthickness=0)
+        cv.grid(row=1, column=0, sticky="nw")
+        self.stick = Stick(cv, 75, 75, 66, 43, self._stick_moved)
+        tooltip.Tooltip(cv, "Drag the stick to drive (or use the arrow keys / WASD). Let go = stops.")
+        stop = tk.Button(box, text="■ Stop", bg=p["PANEL_HI"], fg=p["BAD"], activebackground=p["GREEN"],
+                         activeforeground=p["BG"], relief="flat", bd=0, cursor="hand2",
+                         font=("Segoe UI Semibold", 9), highlightthickness=1, highlightbackground=p["EDGE"],
+                         command=lambda: self.stick.release())
+        stop.grid(row=2, column=0, pady=(4, 0))
+        tooltip.Tooltip(stop, "Stop the motors.")
 
         side = tk.Frame(box, bg=p["PANEL"])
-        side.grid(row=1, column=3, rowspan=3, sticky="nw", padx=(18, 0))
-        tk.Label(side, text="Speed", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8)).pack(anchor="w")
+        side.grid(row=1, column=1, rowspan=2, sticky="nw", padx=(18, 0))
+        tk.Label(side, text="Top speed", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8)).pack(anchor="w")
         self.speed_var = tk.IntVar(value=60)
         tk.Scale(side, from_=30, to=100, orient="horizontal", variable=self.speed_var, length=170, showvalue=True,
                  bg=p["PANEL"], fg=p["TEXT"], troughcolor="#08100a", highlightthickness=0, activebackground=p["GREEN"],
@@ -209,25 +202,23 @@ class DiagnosticsTab(tk.Frame):
         self.drive_lbl = tk.Label(side, text="Connect to the robot's port to drive it.", bg=p["PANEL"], fg=p["DIM"],
                                   font=("Segoe UI", 9), wraplength=230, justify="left", anchor="w")
         self.drive_lbl.pack(anchor="w", pady=(4, 0))
-        tk.Label(side, text="Hold an arrow, or use arrow keys / WASD. Works while the robot is idle; it won't drive "
-                            "forward into an obstacle or off an edge.", bg=p["PANEL"], fg=p["DIM"],
-                 font=("Segoe UI", 8), wraplength=230, justify="left").pack(anchor="w", pady=(4, 0))
+        tk.Label(side, text="Drag the stick, or use arrow keys / WASD. The further you push, the faster it goes. "
+                            "Works while the robot is idle; it won't drive forward into an obstacle or off an edge.",
+                 bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), wraplength=230, justify="left").pack(
+            anchor="w", pady=(4, 0))
 
-        self.drive_dir: str | None = None
         self._drive_job = None
-        self._key_release_job = None
+        self._key_jobs: dict[str, str] = {}
         self._drive_started_at = 0.0
         self._drive_reply_at = 0.0
         top = self.winfo_toplevel()
         top.bind_all("<KeyPress>", self._key_down, add="+")
         top.bind_all("<KeyRelease>", self._key_up, add="+")
 
-    def _speeds(self, d: str) -> tuple[int, int]:
-        s = int(self.speed_var.get())
-        t = max(30, int(s * 0.7))
-        return {"up": (s, s), "down": (-s, -s), "left": (-t, t), "right": (t, -t)}[d]
-
-    def _drive_start(self, d: str):
+    def _stick_moved(self, x: int, y: int):
+        if (x, y) == (0, 0):
+            self._drive_stop()
+            return
         link = self.links["bot"]
         if link.session is None or link.dev not in ("bot", ""):
             self.drive_lbl.configure(text="Connect to the robot's port first.", fg=self.pal["WARN"])
@@ -235,18 +226,15 @@ class DiagnosticsTab(tk.Frame):
         if link.dev == "":
             self.drive_lbl.configure(text="Still finding out what's on this port…", fg=self.pal["DIM"])
             return
-        self.drive_dir = d
-        for n, b in self.drive_btns.items():
-            b.configure(bg=self.pal["GREEN"] if n == d else self.pal["PANEL_HI"])
         if self._drive_job is None:
             self._drive_tick()
 
     def _drive_tick(self):
         bot = self.links["bot"].session
-        if self.drive_dir is None or bot is None:
+        if self.stick.value == (0, 0) or bot is None:
             self._drive_job = None
             return
-        left, right = self._speeds(self.drive_dir)
+        left, right = mix(*self.stick.value, max_speed=int(self.speed_var.get()))
         bot.send(f"drive {left} {right}")
         now = time.time()
         if self._drive_started_at == 0.0:
@@ -257,13 +245,10 @@ class DiagnosticsTab(tk.Frame):
         self._drive_job = self.after(self.SEND_MS, self._drive_tick)
 
     def _drive_stop(self):
-        self.drive_dir = None
         self._drive_started_at = 0.0
         if self._drive_job is not None:
             self.after_cancel(self._drive_job)
             self._drive_job = None
-        for b in self.drive_btns.values():
-            b.configure(bg=self.pal["PANEL_HI"])
         bot = self.links["bot"].session
         if bot is not None:
             bot.send("stop")
@@ -275,25 +260,22 @@ class DiagnosticsTab(tk.Frame):
             return False
 
     def _key_down(self, e):
-        d = self.KEYS.get(e.keysym)
-        if d is None or not self._tab_visible() or isinstance(e.widget, (tk.Entry, ttk.Combobox)):
+        k = e.keysym.lower()
+        if k not in STICK_KEYS or not self._tab_visible() or isinstance(e.widget, (tk.Entry, ttk.Combobox)):
             return
-        if self._key_release_job is not None:  # Windows key auto-repeat: release+press pairs while held
-            self.after_cancel(self._key_release_job)
-            self._key_release_job = None
-        if self.drive_dir != d:
-            self._drive_start(d)
+        job = self._key_jobs.pop(k, None)
+        if job is not None:  # Windows key auto-repeat: release+press pairs while held
+            self.after_cancel(job)
+            return
+        self.stick.key(k, True)
 
     def _key_up(self, e):
-        if self.KEYS.get(e.keysym) is None or not self._tab_visible():
+        k = e.keysym.lower()
+        if k not in STICK_KEYS or not self._tab_visible():
             return
-        if self._key_release_job is not None:
-            self.after_cancel(self._key_release_job)
-        self._key_release_job = self.after(80, self._key_released)
-
-    def _key_released(self):
-        self._key_release_job = None
-        self._drive_stop()
+        if k in self._key_jobs:
+            self.after_cancel(self._key_jobs[k])
+        self._key_jobs[k] = self.after(80, lambda: (self._key_jobs.pop(k, None), self.stick.key(k, False)))
 
     def _drive_reply(self, f: dict):
         p = self.pal
@@ -802,6 +784,6 @@ class DiagnosticsTab(tk.Frame):
     def shutdown(self):
         for link in self.links.values():
             if link.session is not None:
-                if link.kind == "bot" and self.drive_dir is not None:
+                if link.kind == "bot" and self.stick.value != (0, 0):
                     link.session.send("stop")
                 link.session.close()

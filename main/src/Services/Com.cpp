@@ -94,6 +94,17 @@ void Com::sendData(BB::State state, BB::Action action, size_t size, const uint8_
 	txBuf.resize(txBuf.size() + size);
 	memcpy(txBuf.data() + txBuf.size() - size, data, size);
 
+	if(mirrorToConsole){
+		std::string hex;
+		hex.reserve(txBuf.size() * 2);
+		static constexpr char Digits[] = "0123456789abcdef";
+		for(const uint8_t b : txBuf){
+			hex += Digits[b >> 4];
+			hex += Digits[b & 15];
+		}
+		printf("[BBCOM] d=%s\n", hex.c_str());
+	}
+
 	txChar->sendNotif(txBuf);
 	txBuf.clear();
 }
@@ -104,7 +115,14 @@ void Com::tick(float deltaTime) noexcept{
 	auto notif = rxChar->getNextWrite(portMAX_DELAY);
 	if(!notif || notif->data.empty()) return;
 
-	const auto buf = notif->data;
+	handle(std::span<const uint8_t>(notif->data.data(), notif->data.size()));
+}
+
+void Com::inject(const std::vector<uint8_t>& buf){
+	handle(std::span<const uint8_t>(buf.data(), buf.size()));
+}
+
+void Com::handle(std::span<const uint8_t> buf){
 	if(buf.size() < sizeof(Ctrl)){
 		CMF_LOG(Com, LogLevel::Warning, "Received notif with data size less than minimum");
 		return;

@@ -23,6 +23,10 @@ TIPS = {
     "Done": "Close this window.",
     # Diagnostics / Console
     "⟳": "Refresh the list of USB ports.",
+    "⟳ Scan": "Find which board is on which USB port (a few seconds). What it finds fills in the port lists in "
+              "every tab.",
+    "Robot status": "Ask the robot for its battery, memory, WiFi, AI mode and firmware, like the controller's "
+                    "Robot Status page.",
     "Connect": "Open this USB port to watch the board live. Only one tab or program can use a port at a time.",
     "Disconnect": "Close this USB port again (the board keeps running).",
     "Send": "Send the typed command to the board over USB.",

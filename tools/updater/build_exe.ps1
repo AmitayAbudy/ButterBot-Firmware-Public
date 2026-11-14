@@ -25,6 +25,7 @@ $before = if (Test-Path $exe) { (Get-Item $exe).LastWriteTime } else { [datetime
     --add-data "bot_guide.png;." --add-data "controller_guide.png;." --add-data "guide_data.json;." `
     --collect-all esptool --collect-all numpy --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers `
     --collect-submodules anthropic --collect-submodules keyring --hidden-import keyring.backends.Windows `
+    --collect-all bleak --collect-submodules winrt `
     dimension_hopper.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 if (-not (Test-Path $exe) -or (Get-Item $exe).LastWriteTime -le $before) { throw "dist\DimensionHopper.exe was not updated" }

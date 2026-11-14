@@ -13,6 +13,7 @@
 #include <esp_gap_ble_api.h>
 #include <nvs.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 #include <cstdlib>
@@ -319,6 +320,9 @@ protected:
 
 		com->OnConnStatus.bind(this, &Butterbot::onConnStatus);
 		com->OnCommand.bind(this, &Butterbot::onCommand);
+		// Fork: Dimension Hopper's emulated controller drives over Bluetooth without RC mode (no camera hotspot).
+		// The real controller only sends Drive in RC mode, where RCState handles it; here only idle reacts.
+		com->OnDriveData.bind(this, &Butterbot::onIdleDrive);
 		com->OnSettings.bind(this, &Butterbot::onSettings);
 
 		server->start();
@@ -447,6 +451,11 @@ private:
 					else if(line == "diag off") diagUntil = 0;
 					else if(line == "tasks"){ MemMark::mark("on request"); MemMark::dumpTasks(); }
 					else if(line == "heaps"){ heap_caps_print_heap_info(MALLOC_CAP_INTERNAL); }
+					else if(line == "emu on" || line == "emu off"){
+						Com::mirrorToConsole = line == "emu on";
+						printf("[BBEMU] mirror=%d\n", Com::mirrorToConsole ? 1 : 0);
+					}
+					else if(line.rfind("ctrl ", 0) == 0) consoleCtrl(line.c_str() + 5);
 					else if(line.rfind("drive ", 0) == 0) consoleDrive(line.c_str() + 6);
 					else if(line == "stop") stopConsoleDrive("stop");
 					else if(line == "forget") runFlashJob([]{ forgetBonds(); });
@@ -567,12 +576,8 @@ private:
 	static constexpr uint64_t DriveHoldMs = 400;
 	uint64_t driveUntil = 0;
 
-	void consoleDrive(const char* args){
-		int left = 0, right = 0;
-		if(sscanf(args, "%d %d", &left, &right) != 2){
-			printf("[BBDRIVE] result=error why=usage\n");
-			return;
-		}
+	/** Runs the motors for DriveHoldMs if the robot is idle and it's safe. nullptr = driving, else why not. */
+	const char* driveIdle(int left, int right){
 		left = std::clamp(left, -100, 100);
 		right = std::clamp(right, -100, 100);
 
@@ -580,22 +585,67 @@ private:
 		const BBStateMachine* sm = getService<BBStateMachine>();
 		const State* state = sm != nullptr ? sm->getActiveState() : nullptr;
 		if(base == nullptr){
-			printf("[BBDRIVE] result=blocked why=no_motors\n");
-			return;
+			return "no_motors";
 		}
 		if(state == nullptr || strcmp(state->name(), "idle") != 0){
-			printf("[BBDRIVE] result=blocked why=busy state=%s\n", state != nullptr ? state->name() : "none");
-			return;
+			return "busy";
 		}
 		const BaseBoard::Diag d = base->getDiag();
 		if(left + right > 0 && (d.frontFiltered == 1 || d.bottom == 0)){
 			stopConsoleDrive("blocked");
-			printf("[BBDRIVE] result=blocked why=%s\n", d.frontFiltered == 1 ? "obstacle" : "no_floor");
-			return;
+			return d.frontFiltered == 1 ? "obstacle" : "no_floor";
 		}
 		base->setMotors(static_cast<int8_t>(left), static_cast<int8_t>(right));
 		driveUntil = millis() + DriveHoldMs;
-		printf("[BBDRIVE] result=ok l=%d r=%d\n", left, right);
+		return nullptr;
+	}
+
+	void consoleDrive(const char* args){
+		int left = 0, right = 0;
+		if(sscanf(args, "%d %d", &left, &right) != 2){
+			printf("[BBDRIVE] result=error why=usage\n");
+			return;
+		}
+		const char* why = driveIdle(left, right);
+		if(why == nullptr){
+			printf("[BBDRIVE] result=ok l=%d r=%d\n", std::clamp(left, -100, 100), std::clamp(right, -100, 100));
+		}else if(strcmp(why, "busy") == 0){
+			const BBStateMachine* sm = getService<BBStateMachine>();
+			const State* state = sm != nullptr ? sm->getActiveState() : nullptr;
+			printf("[BBDRIVE] result=blocked why=busy state=%s\n", state != nullptr ? state->name() : "none");
+		}else{
+			printf("[BBDRIVE] result=blocked why=%s\n", why);
+		}
+	}
+
+	/** Fork: "ctrl <hex>" - a controller message from Dimension Hopper's emulated controller over USB. */
+	void consoleCtrl(const char* hex){
+		const std::string bytes = fromHex(hex, strlen(hex));
+		Com* com = getService<Com>();
+		if(com == nullptr || bytes.empty()){
+			printf("[BBEMU] result=error\n");
+			return;
+		}
+		com->inject(std::vector<uint8_t>(bytes.begin(), bytes.end()));
+	}
+
+	/** Fork: a Drive message while idle (the emulated controller). Same stick mixing as RC mode, simplified. */
+	void onIdleDrive(DriveData data){
+		const float x = std::clamp(static_cast<float>(data.joystickX), -100.0f, 100.0f);
+		const float y = std::clamp(static_cast<float>(data.joystickY), -100.0f, 100.0f);
+		if(std::fabs(x) < 1.0f && std::fabs(y) < 1.0f){
+			stopConsoleDrive("released");
+			return;
+		}
+		const float turnSign = y >= 0.0f ? 1.0f : -1.0f;
+		float l = y + 0.5f * turnSign * x;
+		float r = y - 0.5f * turnSign * x;
+		const float peak = std::max(std::fabs(l), std::fabs(r));
+		const float deflection = std::clamp(std::sqrt(x * x + y * y) / 100.0f, 0.0f, 1.0f);
+		const float target = 30.0f + 70.0f * deflection;
+		l = l / peak * target;
+		r = r / peak * target;
+		driveIdle(static_cast<int>(l), static_cast<int>(r));
 	}
 
 	void stopConsoleDrive(const char* why){
@@ -684,7 +734,7 @@ private:
 	/** Fork: the controller's Robot status page asked (Ctrl::Status). */
 	void sendRobotStatus(){
 		Com* com = getService<Com>();
-		if(com == nullptr || com->getStatus() != Com::ConnStatus::Connected) return;
+		if(com == nullptr || !com->controllerPresent()) return;
 		const Battery* battery = getService<Battery>();
 		const HomeWiFi::Config c = HomeWiFi::load();
 		auto kb = [](size_t bytes){ return (uint8_t) std::min<size_t>(bytes / 1024, 255); };

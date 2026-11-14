@@ -15,7 +15,7 @@ Every button has a tooltip: hover over it to see what it does.
 
 ![Flash tab](../../docs/images/flash.png)
 
-- **Scan dimensions** finds the robot and the controller on USB and tells them apart (it listens for their status
+- **Scan dimensions** (and the **⟳ Scan** button next to every port list, in every tab) finds the robot and the controller on USB and tells them apart (it listens for their status
   line first, and only probes boards that stay silent).
 - **Pick a payload per board:**
   - *Latest GitHub release* from this fork (the default - `Exadon/...` with a green **FORK** badge) or the stock
@@ -30,7 +30,8 @@ Every button has a tooltip: hover over it to see what it does.
   the chip.
 - **Backs up first** (optional) to `%LOCALAPPDATA%\DimensionHopper\backups`, **verifies** every region after writing,
   then **waits for the board to boot** and checks it's running the version it was given.
-- **Update both** does the robot and then the controller.
+- **Update both** flashes the robot and the controller at the same time (each in its own process); if one fails, the
+  other still finishes.
 - Per board: **Status** (battery, charging, link, firmware, free memory, why it last restarted), **Probe**, **Wake**,
   **Forget pairing**.
 
@@ -54,12 +55,25 @@ sample. Classic is the stock voice.
 The robot and the controller side by side, each with its own port and Connect button (both can be connected at once;
 the ports are filled in from the Flash tab after a scan):
 
-- **ButterBot:** live sensors, motors, battery, link and motion events; a **drive pad** (hold an arrow, or use the arrow
-  keys / WASD - it won't drive forward into an obstacle or off an edge, and stops when you let go); and the **camera** -
+- **ButterBot:** live sensors, motors, battery, link and motion events; a **joystick** to drive it (drag it, or use
+  the arrow keys / WASD; the further you push, the faster it goes - it won't drive forward into an obstacle or off an
+  edge, and stops when you let go); and the **camera** -
   what the robot sees, about 1-2 frames a second over USB while it's idle, with **Save snapshot…**.
 - **Controller:** the stick position (raw and processed), every button, the robot link and battery; and a live
   **screen mirror** - exactly what the controller's screen shows (only changes travel over USB, so menus keep up),
   with **Save screenshot…** (a sharp PNG at 4x size).
+
+### Controller
+A stand-in for the hardware controller, drawn like it: the same four buttons in the same places (click them, or Q/E/Z/C),
+a stick you drag (or WASD / arrows) that drives the robot, a screen showing what the robot sends its controller
+(listening, subtitles, chat replies, status...), the controller's whole action menu, and a **Robot status** button.
+
+- **USB:** the robot plugged into this PC. Works next to the hardware controller.
+- **Bluetooth:** wireless, like the real controller (greyed out, with the reason, if this PC has no Bluetooth).
+  **The robot takes one controller at a time**: switch the hardware controller off before connecting here; when you
+  disconnect, it reconnects by itself and keeps its pairing.
+- RC mode with the camera still needs the hardware controller (it makes the WiFi hotspot the camera streams to); here
+  the stick drives the robot directly.
 
 ### Console
 The board's raw log with filters, a table of what the robot heard and matched, a box to send console commands, and
@@ -142,7 +156,9 @@ Dev flags: `--selftest <out.txt>` checks the bundled esptool, stubs and AI libra
 |---|---|
 | `hopper_core.py` | Ports, probe, status, GitHub releases, image checks, quick flash, backup, console commands. No UI. |
 | `dimension_hopper.py` | Tk UI: the animated portal, device slots, job runner, log; hosts the tabs. |
-| `guide_tab.py`, `personalize_tab.py`, `diag_tab.py`, `console_tab.py`, `ai_tab.py` | The tabs. |
+| `guide_tab.py`, `personalize_tab.py`, `diag_tab.py`, `controller_tab.py`, `console_tab.py`, `ai_tab.py` | The tabs. |
+| `controller_link.py` | The emulated controller's link to the robot: the message format, over USB or Bluetooth (bleak). |
+| `stick_widget.py` | The joystick used by the Controller and Diagnostics tabs. |
 | `brain.py` | The AI brain: Whisper, Ollama, the robot protocol and server, persona and timings. |
 | `tooltip.py` | Hover help for every button. |
 | `build_exe.ps1` | Reproducible PyInstaller build. |
