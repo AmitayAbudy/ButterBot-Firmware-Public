@@ -570,6 +570,14 @@ void ListenState::tick(float){
     }
 
     if(!r.action.empty()){
+        // WiFi holds ~25 KB of internal RAM until the worker has switched it off. An action can start right away
+        // when the reply has nothing to say, and a dance loads its speech model at once: together they ran the
+        // robot out of internal memory. Same wait as the fallback path.
+        const uint32_t start = millis();
+        while(aiWorkerRunning && millis() - start < 5000){
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        MemMark::mark("ai: action");
         for(size_t i = 0; i < activations.size(); ++i){
             if(r.action == activations[i].string){
                 onPhrase(true, static_cast<int>(i), r.action, 1.0f);

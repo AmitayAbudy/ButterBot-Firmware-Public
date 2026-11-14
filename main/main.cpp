@@ -358,10 +358,11 @@ protected:
 		ServiceLocator::LEDControlInstance->startIdle();
 
 		startStatusReporter();
+		MemMark::watchFailedAllocs();
 		printf("[BBMEM] after init: internal free %u KB (largest block %u KB, lowest %u KB), PSRAM free %u KB\n",
 		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
 		       (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
-		       (unsigned) (heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+		       (unsigned) MemMark::lowestKb(),
 		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
 		MemMark::dumpTasks();
 	}
@@ -445,6 +446,7 @@ private:
 					if(line == "diag on") diagUntil = millis() + DiagHoldMs;
 					else if(line == "diag off") diagUntil = 0;
 					else if(line == "tasks"){ MemMark::mark("on request"); MemMark::dumpTasks(); }
+					else if(line == "heaps"){ heap_caps_print_heap_info(MALLOC_CAP_INTERNAL); }
 					else if(line.rfind("drive ", 0) == 0) consoleDrive(line.c_str() + 6);
 					else if(line == "stop") stopConsoleDrive("stop");
 					else if(line == "forget") runFlashJob([]{ forgetBonds(); });
@@ -471,6 +473,7 @@ private:
 				}
 			}
 
+			MemMark::sample(); // every 50 ms: the real low point of internal RAM
 			const uint64_t now = millis();
 			if(driveUntil != 0 && now >= driveUntil){
 				stopConsoleDrive("timeout");
@@ -542,15 +545,15 @@ private:
 				case ChargingState::Full: charge = "full"; break;
 			}
 		}
-		printf("[BBSTAT] dev=bot fw=%s batt=%d charge=%s link=%s up=%llu ram=%u ram_min=%u reset=%s boots=%lu\n",
+		printf("[BBSTAT] dev=bot fw=%s batt=%d charge=%s link=%s up=%llu ram=%u ram_min=%u alloc_fail=%lu reset=%s boots=%lu\n",
 		       esp_app_get_description()->version,
 		       battery != nullptr ? static_cast<int>(battery->getPerc() + 0.5f) : -1,
 		       charge,
 		       com == nullptr ? "unknown" : (com->getStatus() == Com::ConnStatus::Connected ? "connected" : "disconnected"),
 		       millis() / 1000,
-		       // internal RAM in KB (now / lowest since boot): Bluetooth aborts the robot if this runs out
+		       // internal RAM in KB (now / lowest seen since boot): Bluetooth aborts the robot if this runs out
 		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-		       (unsigned) (heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+		       (unsigned) MemMark::lowestKb(), (unsigned long) MemMark::failedAllocs.load(),
 		       resetReasonName(), (unsigned long) bootCount);
 	}
 
@@ -696,7 +699,7 @@ private:
 			}
 		}
 		st.ramKb = kb(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-		st.ramMinKb = kb(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+		st.ramMinKb = (uint8_t) std::min<uint32_t>(MemMark::lowestKb(), 255);
 		st.wifi = c.ssid.empty() ? 0 : 1;
 		st.ai = c.aiEnabled ? 1 : 0;
 		st.brain = c.brainIp != 0 ? 1 : 0;
@@ -778,7 +781,7 @@ private:
 					snprintf(brainText, sizeof(brainText), "%s", ip4addr_ntoa(&b));
 				}
 				printf("[BBWIFI] result=connected ip=%s rssi=%d ram=%u ram_min=%u brain=%s\n", ipText, wifi.rssi(), ram,
-				       (unsigned) (heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024), brainText);
+				       (unsigned) MemMark::lowestKb(), brainText);
 			}
 			wifi.stop();
 			bot->wifiTesting = false;
@@ -891,7 +894,7 @@ private:
 				}else{
 					const int64_t ms = BrainLink::uploadTest(ba->ip, ba->port, ba->kb * 1024, ba->radioMode);
 					const unsigned ram = (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
-					const unsigned ramMin = (unsigned) (heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024);
+					const unsigned ramMin = (unsigned) MemMark::lowestKb();
 					if(ms < 0){
 						printf("[BBWIFI] result=bench_failed kb=%lu coex=%s rssi=%d ram=%u\n", (unsigned long) ba->kb,
 						       (ba->radioMode == 2 ? "quiet" : ba->radioMode == 1 ? "wifi" : "balance"), wifi.rssi(), ram);

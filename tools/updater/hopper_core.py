@@ -988,7 +988,12 @@ class DeviceStatus:
             try:
                 ram, low = int(f["ram"]), int(f.get("ram_min", f["ram"]))
                 bits.append(f"RAM {ram} KB free (lowest {low} KB)")
-                worry |= low < 8
+                fails = int(f.get("alloc_fail", "0") or 0)
+                if fails:
+                    bits.append(f"{fails} memory request{'s' if fails != 1 else ''} failed")
+                # Older firmware's "lowest" adds up per-region minimums and can read 0 without a real shortage;
+                # firmware that reports alloc_fail measures the real low point, and failures are what matter
+                worry |= bool(fails) or (low < 8 and "alloc_fail" not in f)
             except ValueError:
                 pass
         if "up" in f:
