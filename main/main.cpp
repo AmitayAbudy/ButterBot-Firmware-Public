@@ -753,9 +753,10 @@ private:
 		xTaskCreatePinnedToCore([](void* self){
 			auto* bot = static_cast<Butterbot*>(self);
 			HomeWiFi wifi;
-			const HomeWiFi::Result r = wifi.start(HomeWiFi::load(), 8000);
+			const HomeWiFi::Result r = wifi.start(HomeWiFi::load(), 10000);
 			if(r != HomeWiFi::Result::Ok){
-				printf("[BBWIFI] result=failed why=%s ram=%u\n", HomeWiFi::resultName(r),
+				printf("[BBWIFI] result=failed why=%s reason=%u err=%d joined=%d ram=%u\n", HomeWiFi::resultName(r),
+				       (unsigned) wifi.reason(), wifi.startError(), wifi.wasAssociated() ? 1 : 0,
 				       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 			}else{
 				ip4_addr_t a{ .addr = wifi.ip() };

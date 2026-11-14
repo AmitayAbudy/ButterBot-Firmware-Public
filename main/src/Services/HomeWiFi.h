@@ -34,7 +34,7 @@ public:
 	static void saveBrain(uint32_t ip, uint16_t port);
 	static void clear();
 
-	enum class Result : uint8_t { Ok, NotConfigured, NotFound, WrongPassword, Timeout, Failed };
+	enum class Result : uint8_t { Ok, NotConfigured, NotFound, WrongPassword, Timeout, Failed, NoIp, StartFailed };
 	static const char* resultName(Result r);
 
 	/**
@@ -62,17 +62,25 @@ public:
 	uint32_t ip() const { return ipAddr; }
 	int rssi() const;
 
+	/** Details of the last start() for the console: WiFi disconnect reason (0 = none) and the ESP error if it didn't start. */
+	uint8_t reason() const { return lastReason; }
+	int startError() const { return lastErr; }
+	bool wasAssociated() const { return associated; }
+
 private:
 	bool bringUp();
 	esp_netif_t* netif = nullptr;
 	EventGroupHandle_t events = nullptr;
 	esp_event_handler_instance_t wifiHandler = nullptr;
 	esp_event_handler_instance_t ipHandler = nullptr;
+	esp_event_handler_instance_t connHandler = nullptr;
 	bool started = false;
 	bool loopCreated = false;
 	bool up = false;
 	uint32_t ipAddr = 0;
 	volatile uint8_t lastReason = 0;
+	volatile bool associated = false; // joined the network (DHCP may still be pending)
+	int lastErr = 0;
 
 	static constexpr EventBits_t GotIp = BIT0;
 	static constexpr EventBits_t Failed = BIT1;

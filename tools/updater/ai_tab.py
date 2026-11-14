@@ -434,10 +434,17 @@ class AITab(tk.Frame):
             self._say(self.wifi_status, self.wifi_lamp, f"The robot is busy ({r.get('state')}). Try when it's idle.",
                       "warn")
         else:
+            code = r.get("why", "")
             why = {"network_not_found": "network not found (is it 2.4 GHz and in range?)",
                    "wrong_password": "wrong password", "not_configured": "no WiFi saved yet - Send to robot first",
-                   "timeout": "timed out"}.get(r.get("why", ""), r.get("why", "failed"))
-            self._say(self.wifi_status, self.wifi_lamp, f"Couldn't connect: {why}.", "bad")
+                   "timeout": "the router never answered (is it 2.4 GHz, and not set to 5 GHz-only or WiFi 6-only?)",
+                   "no_ip_address": "it joined the network but the router didn't give it an address (DHCP) - "
+                                    "check the router allows new devices (MAC filter, guest isolation, address pool)",
+                   "wifi_start_failed": "the robot's WiFi didn't start - switch the robot off and on, then try again",
+                   }.get(code, code or "failed")
+            detail = ", ".join(f"{k} {r[k]}" for k in ("reason", "err", "ram") if r.get(k) not in (None, "", "0"))
+            self._say(self.wifi_status, self.wifi_lamp,
+                      f"Couldn't connect: {why}." + (f" (details: {detail})" if detail else ""), "bad")
 
     def check_robot(self):
         def done(r):
@@ -724,6 +731,8 @@ class AITab(tk.Frame):
         "wrong_password": "the WiFi password was rejected - re-send it in step 1",
         "timeout": "joining the WiFi timed out - try Test robot WiFi in step 1",
         "failed": "WiFi didn't start - try Test robot WiFi in step 1",
+        "no_ip_address": "it joined your WiFi but the router gave it no address - try Test robot WiFi in step 1",
+        "wifi_start_failed": "its WiFi didn't start - switch the robot off and on",
         "brain_not_found": "it couldn't find the brain - press Start with the robot plugged in",
         "brain_unreachable": "it couldn't reach the brain - press Start with the robot plugged in",
         "send_failed": "the upload to the brain broke off - usually a one-off",

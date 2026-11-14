@@ -3,6 +3,7 @@
 #include <cstring>
 #include <esp_event.h>
 #include <esp_wifi.h>
+#include <esp_heap_caps.h>
 #include <nvs.h>
 #include "Util/MemMark.h"
 #include "Log/Log.h"
@@ -91,6 +92,8 @@ const char* HomeWiFi::resultName(Result r){
 		case Result::NotFound: return "network_not_found";
 		case Result::WrongPassword: return "wrong_password";
 		case Result::Timeout: return "timeout";
+		case Result::NoIp: return "no_ip_address";
+		case Result::StartFailed: return "wifi_start_failed";
 		default: return "failed";
 	}
 }
@@ -102,6 +105,8 @@ bool HomeWiFi::bringUp(){
 	loopCreated = loopErr == ESP_OK; // INVALID_STATE: someone else's loop already exists - leave it alone
 	events = xEventGroupCreate();
 	lastReason = 0;
+	associated = false;
+	lastErr = 0;
 
 	netif = esp_netif_create_default_wifi_sta();
 
@@ -117,9 +122,15 @@ bool HomeWiFi::bringUp(){
 		self->up = true;
 		xEventGroupSetBits(self->events, GotIp);
 	}, this, &ipHandler);
+	esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, [](void* arg, esp_event_base_t, int32_t, void*){
+		static_cast<HomeWiFi*>(arg)->associated = true;
+	}, this, &connHandler);
 
 	wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
-	if(esp_wifi_init(&init) != ESP_OK){
+	lastErr = esp_wifi_init(&init);
+	if(lastErr != ESP_OK){
+		printf("[BBWIFI] event=init_failed err=%s ram=%u\n", esp_err_to_name(lastErr),
+		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 		return false;
 	}
 	started = true;
@@ -158,7 +169,7 @@ bool HomeWiFi::scan(std::vector<Network>& out){
 HomeWiFi::Result HomeWiFi::start(const Config& cfg, uint32_t timeoutMs){
 	if(cfg.ssid.empty()) return Result::NotConfigured;
 
-	if(!bringUp()) return Result::Failed;
+	if(!bringUp()) return Result::StartFailed;
 
 	wifi_config_t wc = {};
 	strncpy(reinterpret_cast<char*>(wc.sta.ssid), cfg.ssid.c_str(), sizeof(wc.sta.ssid));
@@ -166,25 +177,41 @@ HomeWiFi::Result HomeWiFi::start(const Config& cfg, uint32_t timeoutMs){
 	wc.sta.threshold.authmode = cfg.pass.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA_PSK;
 	wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 	wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+	wc.sta.pmf_cfg.capable = true;
+	wc.sta.pmf_cfg.required = false;
+	wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; // WPA2/WPA3 mixed routers
 	esp_wifi_set_mode(WIFI_MODE_STA);
 	esp_wifi_set_config(WIFI_IF_STA, &wc);
 	esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // needed for Bluetooth coexistence
-	esp_wifi_start();
-	esp_wifi_connect();
+	lastErr = esp_wifi_start();
+	if(lastErr == ESP_OK) lastErr = esp_wifi_connect();
+	if(lastErr != ESP_OK){
+		printf("[BBWIFI] event=start_failed err=%s ram=%u\n", esp_err_to_name(lastErr),
+		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+		return Result::StartFailed;
+	}
 
-	// A failed attempt may be retried once (the first association sometimes times out on busy networks)
+	// Two tries: the first association sometimes times out or is refused on busy networks
 	for(int attempt = 0; attempt < 2; ++attempt){
 		const EventBits_t bits = xEventGroupWaitBits(events, GotIp | Failed, pdTRUE, pdFALSE, pdMS_TO_TICKS(timeoutMs));
 		if(bits & GotIp){
 			MemMark::mark("wifi: got ip");
 			return Result::Ok;
 		}
-		if(!(bits & Failed)) return Result::Timeout;
+		if(!(bits & Failed)){
+			// Joined but the router never gave an address: retrying the association won't help
+			if(associated) return Result::NoIp;
+			// No answer at all yet: the driver is still scanning/joining (slow with Bluetooth sharing the radio),
+			// so give it a second period rather than restarting the attempt
+			if(attempt == 1) return Result::Timeout;
+			continue;
+		}
 		if(lastReason == WIFI_REASON_NO_AP_FOUND) return Result::NotFound;
 		if(lastReason == WIFI_REASON_AUTH_FAIL || lastReason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
 		   lastReason == WIFI_REASON_HANDSHAKE_TIMEOUT || lastReason == WIFI_REASON_MIC_FAILURE){
 			if(attempt == 1) return Result::WrongPassword;
 		}
+		associated = false;
 		esp_wifi_connect();
 	}
 	return Result::Failed;
@@ -201,6 +228,10 @@ void HomeWiFi::stop(){
 	if(wifiHandler){
 		esp_event_handler_instance_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifiHandler);
 		wifiHandler = nullptr;
+	}
+	if(connHandler){
+		esp_event_handler_instance_unregister(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, connHandler);
+		connHandler = nullptr;
 	}
 	if(ipHandler){
 		esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ipHandler);
