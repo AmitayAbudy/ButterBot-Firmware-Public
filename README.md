@@ -48,8 +48,10 @@ runs locally: [Whisper](https://github.com/SYSTRAN/faster-whisper) turns speech 
   with Bluetooth.
 
 ### Voices
-Eight voice presets: **Classic** (the stock voice), Deep, High, Sassy, Deadpan, Robot (ring-modulated), Retro (8-bit)
-and Announcer (with echo). Chosen in Dimension Hopper's *Personalize* tab and saved on the robot.
+Nine voice presets: **Classic** (the stock voice), Deep, High, Sassy, Deadpan, Robot (ring-modulated), Retro (8-bit),
+Announcer (with echo) and **Show accurate** - pitch, speed and sound measured from the episode's "What is my purpose?"
+(matched on the robot: same length, pitch and tone balance as the episode - low, flat and slow through a tinny speaker with a slight warble). Chosen in Dimension Hopper's
+*Personalize* tab and saved on the robot; pitch and speed sliders nudge any preset except Show accurate.
 
 ### Voice commands
 - Recognises commands more reliably: a longer listening window and better timing around the prompt, ambiguous matches

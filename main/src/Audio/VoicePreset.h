@@ -16,7 +16,7 @@
  */
 namespace Voice {
 
-enum class Fx : uint8_t { None, Ring, Crush };
+enum class Fx : uint8_t { None, Ring, Crush, Show };
 
 struct Preset {
 	const char* name;
@@ -26,6 +26,7 @@ struct Preset {
 	Fx fx;
 	float reverbWet;
 	float reverbRoom;
+	bool tunable = true;  // false: the owner's pitch / speed nudges don't apply (the show-accurate voice)
 };
 
 // Index 0 is the stock voice, exactly as CircuitMess shipped it.
@@ -38,6 +39,10 @@ inline constexpr Preset Presets[] = {
 	{ "robot",    100.0f,  1.0f, 1.10f, Fx::Ring,  0.08f, 0.20f },
 	{ "retro",    110.0f,  8.0f, 1.05f, Fx::Crush, 0.00f, 0.20f },
 	{ "announcer", 82.0f, 14.0f, 1.15f, Fx::None,  0.28f, 0.75f },
+	// Matched to the show's "What is my purpose?" by rendering on the robot ("render") and comparing with the
+	// episode: same length (1.31 s), pitch (121 Hz) and band balance; band-limited like a tiny speaker with a
+	// slight warble (Fx::Show). The engine's own melody stays a little flatter than the show's.
+	{ "show",     122.0f, 10.0f, 1.28f, Fx::Show,  0.04f, 0.20f, false },
 };
 inline constexpr uint8_t Count = std::size(Presets);
 inline constexpr float StockStretch = 1.10f;
@@ -52,10 +57,41 @@ inline const Preset& current(){
 	return Presets[i < Count ? i : 0];
 }
 
+// Fx::Show's sound: a tiny speaker (high-pass, low-pass) and a slow warble
+struct ShowFx {
+	float warbleHz = 13.0f;
+	float depth = 0.3f;
+	float hpHz = 500.0f;
+	float lpHz = 4000.0f;
+	float gain = 1.8f;
+};
+inline constexpr ShowFx ShowSound{};
+
+// Dev aid ("render" console command): every setting replaced for one rendered sentence, so the show voice can be
+// tuned from the PC without reflashing. Off in normal use.
+struct Override {
+	float pitch, range, stretch;
+	Fx fx;
+	ShowFx show;
+};
+inline std::atomic<bool> overrideOn{ false };
+inline Override overrideVals{};
+
 // The preset with the owner's pitch / speed nudges applied - what the voice actually uses.
-inline float pitch(){ return current().pitch * (1.0f + pitchTune.load() / 100.0f); }
-inline float range(){ return current().range * (1.0f + pitchTune.load() / 100.0f); }
-inline float stretch(){ return current().stretch / (1.0f + speedTune.load() / 100.0f); }
+inline float pitch(){
+	if(overrideOn) return overrideVals.pitch;
+	return current().pitch * (current().tunable ? 1.0f + pitchTune.load() / 100.0f : 1.0f);
+}
+inline float range(){
+	if(overrideOn) return overrideVals.range;
+	return current().range * (current().tunable ? 1.0f + pitchTune.load() / 100.0f : 1.0f);
+}
+inline float stretch(){
+	if(overrideOn) return overrideVals.stretch;
+	return current().stretch / (current().tunable ? 1.0f + speedTune.load() / 100.0f : 1.0f);
+}
+inline Fx fx(){ return overrideOn ? overrideVals.fx : current().fx; }
+inline ShowFx showFx(){ return overrideOn ? overrideVals.show : ShowSound; }
 
 // Name or number -> index, or -1.
 inline int find(const char* nameOrIndex){

@@ -52,8 +52,9 @@ Every voice command and the controller's buttons, with pictures.
 ![Personalize tab](../../docs/images/personalize.png)
 
 Make the robot yours:
-- **Voice** - eight presets; click one to switch and hear a sample. Classic is the stock voice. Pitch and speed
-  sliders nudge any preset (±40 %).
+- **Voice** - nine presets; click one to switch and hear a sample. Classic is the stock voice; **Show accurate** is
+  the closest to the show's ButterBot (measured from the episode) and locks the sliders. Pitch and speed sliders
+  nudge any other preset (±40 %).
 - **Names** - yours (it greets you by name when it recognises your face) and the robot's; both are used by the AI too.
 - **Start-up line** - what the robot says when it switches on; `{name}` becomes your name.
 - **Controller** - the theme (Main, Rose, Red, Blue, or the fork's Portal, Butter, Ice, Mono and Purple; it switches

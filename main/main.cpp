@@ -88,6 +88,8 @@
 #include "Util/ServiceLocator.h"
 #include "Audio/SoundEffects.h"
 #include <esp_heap_caps.h>
+#include <mbedtls/base64.h>
+#include <array>
 
 DEFINE_LOG(Butterbot)
 
@@ -484,6 +486,7 @@ private:
 					else if(line.rfind("chat set ", 0) == 0) runFlashJob([args = line.substr(9)]{ setChat(args); });
 					else if(line.rfind("voice ", 0) == 0) runFlashJob([name = line.substr(6)]{ setVoice(name.c_str()); });
 					else if(line.rfind("say ", 0) == 0) say(line.substr(4));
+					else if(line.rfind("render ", 0) == 0) render(line.substr(7));
 					else if(line == "wifi") runFlashJob([]{ printWifi(); }); // reads NVS strings from flash
 					else if(line.rfind("wifi set ", 0) == 0) runFlashJob([args = line.substr(9)]{ setWifi(args.c_str()); });
 					else if(line == "wifi clear") runFlashJob([]{ HomeWiFi::clear(); printWifi(); });
@@ -814,6 +817,77 @@ private:
 		}
 		Voice::set(static_cast<uint8_t>(i));
 		printVoice();
+	}
+
+	/*
+	 * Fork, dev aid: "render <hex text>" (the current voice) or
+	 * "render <pitch> <range> <stretch> <fx 0-3> <warbleHz> <depth> <hpHz> <lpHz> <gain> <hex text>" synthesizes the
+	 * text through the full voice chain (speech + effect + reverb) without playing it, and sends the 16 kHz mono PCM
+	 * to the PC: [BBREND] n=<samples> sr=16000 lines=<k>, k x [BBREND] i=<line> d=<base64>, [BBREND] done.
+	 * Lets Dimension Hopper's dev scripts compare the robot's voice with a reference recording.
+	 */
+	void render(const std::string& args){
+		// newlib nano's sscanf has no %f: parse the numbers with strtof
+		float v[9];
+		const char* cur = args.c_str();
+		bool custom = true;
+		for(float& f : v){
+			char* end = nullptr;
+			f = strtof(cur, &end);
+			if(end == cur || *end != ' '){
+				custom = false;
+				break;
+			}
+			cur = end + 1;
+		}
+		const char* hex = custom ? cur : args.c_str();
+		const std::string text = fromHex(hex, strlen(hex));
+		const BBStateMachine* sm = getService<BBStateMachine>();
+		const State* state = sm != nullptr ? sm->getActiveState() : nullptr;
+		Audio* audio = getService<Audio>();
+		SpeechAudioGen* gen = ServiceLocator::SpeechAudioGenInstance.get();
+		if(text.empty() || audio == nullptr || gen == nullptr || !ServiceLocator::SpeechGenInstance){
+			printf("[BBREND] result=error\n");
+			return;
+		}
+		if(state == nullptr || strcmp(state->name(), "idle") != 0 || audio->isPlaying()){
+			printf("[BBREND] result=busy\n");
+			return;
+		}
+		if(custom){
+			Voice::overrideVals = { v[0], v[1], v[2], static_cast<Voice::Fx>(std::clamp((int) v[3], 0, 3)),
+			                        { v[4], v[5], v[6], v[7], v[8] } };
+			Voice::overrideOn = true;
+		}
+		static constexpr size_t MaxSamples = 16000 * 8;
+		std::vector<int16_t> pcm;
+		pcm.reserve(MaxSamples);
+		gen->open(std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text));
+		std::array<int16_t, 512> chunk{};
+		while(pcm.size() < MaxSamples){
+			const size_t got = gen->getData(reinterpret_cast<uint8_t*>(chunk.data()), sizeof(chunk)) / sizeof(int16_t);
+			if(got == 0) break;
+			pcm.insert(pcm.end(), chunk.begin(), chunk.begin() + std::min(got, MaxSamples - pcm.size()));
+		}
+		gen->close();
+		Voice::overrideOn = false;
+
+		static constexpr size_t LineBytes = 1500;
+		const size_t bytes = pcm.size() * sizeof(int16_t);
+		const size_t lines = (bytes + LineBytes - 1) / LineBytes;
+		printf("[BBREND] n=%u sr=16000 lines=%u\n", (unsigned) pcm.size(), (unsigned) lines);
+		std::vector<unsigned char> b64(LineBytes * 4 / 3 + 8);
+		const auto* raw = reinterpret_cast<const unsigned char*>(pcm.data());
+		for(size_t i = 0; i < lines; ++i){
+			const size_t len = std::min(LineBytes, bytes - i * LineBytes);
+			size_t outLen = 0;
+			mbedtls_base64_encode(b64.data(), b64.size(), &outLen, raw + i * LineBytes, len);
+			printf("[BBREND] i=%u d=%.*s\n", (unsigned) i, (int) outLen, (const char*) b64.data());
+			fflush(stdout);
+			fsync(fileno(stdout)); // wait until the UART has sent it: pushing ~70 KB at once drops bytes
+			vTaskDelay(pdMS_TO_TICKS(10));
+		}
+		printf("[BBREND] done\n");
 	}
 
 	void say(const std::string& text){

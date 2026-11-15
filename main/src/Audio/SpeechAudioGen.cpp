@@ -1,6 +1,7 @@
 #include "SpeechAudioGen.h"
 #include "Core/Application.h"
 #include "VoicePreset.h"
+#include <algorithm>
 #include <cmath>
 
 DEFINE_LOG(SpeechAudioGen)
@@ -18,12 +19,38 @@ void SpeechAudioGen::open(std::unique_ptr<AudioSource> resource){
 
 	// Fork: voice preset effects, fixed for the whole utterance
 	const Voice::Preset& preset = Voice::current();
-	fx = preset.fx;
+	fx = Voice::fx();
 	reverb.setRoomSize(preset.reverbRoom);
 	reverb.setWet(preset.reverbWet);
 	ringPhase = 0.0f;
 	crushCount = 0;
 	crushHeld = 0;
+	const Voice::ShowFx show = Voice::showFx();
+	showHp1.set(true, show.hpHz, 0.707f);
+	showHp2.set(true, show.hpHz, 0.707f);
+	showLp.set(false, show.lpHz, 0.707f);
+	warblePhase = 0.0f;
+	warbleStep = 2.0f * (float) M_PI * show.warbleHz / (float) SampleRate;
+	warbleDepth = show.depth;
+	showGain = show.gain;
+}
+
+// RBJ cookbook high/low-pass
+void SpeechAudioGen::Biquad::set(bool highPass, float hz, float q){
+	const float w = 2.0f * (float) M_PI * hz / (float) SampleRate;
+	const float alpha = std::sin(w) / (2.0f * q), c = std::cos(w);
+	const float a0 = 1.0f + alpha;
+	if(highPass){
+		b0 = (1.0f + c) / 2.0f / a0;
+		b1 = -(1.0f + c) / a0;
+	}else{
+		b0 = (1.0f - c) / 2.0f / a0;
+		b1 = (1.0f - c) / a0;
+	}
+	b2 = b0;
+	a1 = -2.0f * c / a0;
+	a2 = (1.0f - alpha) / a0;
+	z1 = z2 = 0.0f;
 }
 
 void SpeechAudioGen::close(){
@@ -82,6 +109,19 @@ void SpeechAudioGen::applyFx(int16_t* samples, size_t count){
 				}
 				samples[i] = crushHeld;
 				crushCount = (crushCount + 1) % Hold;
+			}
+			return;
+		}
+
+		case Voice::Fx::Show: {
+			// The show's robot: no bass and little top (Voice::ShowSound: ~500 Hz - 4 kHz, like a tiny speaker), and a
+			// ~13 Hz warble - the clip's harmonics come in pairs ~13 Hz apart. Gain makes up for the bass taken out.
+			for(size_t i = 0; i < count; ++i){
+				float y = showLp.run(showHp2.run(showHp1.run((float) samples[i])));
+				y *= showGain * (1.0f - warbleDepth * 0.5f + warbleDepth * 0.5f * std::sin(warblePhase));
+				samples[i] = static_cast<int16_t>(std::clamp(y, -32767.0f, 32767.0f));
+				warblePhase += warbleStep;
+				if(warblePhase > 2.0f * (float) M_PI) warblePhase -= 2.0f * (float) M_PI;
 			}
 			return;
 		}
