@@ -140,6 +140,7 @@ class UsbLink(Link):
         self.port = port
         self.session = core.DiagSession(port, self._line, self._end, diag=False)
         self._keep = threading.Event()
+        self.on_cam: Callable[[dict], None] | None = None   # [BBCAM] replies (the camera view), if wanted
 
     def start(self):
         self.session.start()
@@ -156,6 +157,8 @@ class UsbLink(Link):
             if not self.connected and fields["mirror"] == "1":
                 self.connected = True
                 self.on_state(f"Connected over USB ({self.port})", True)
+        elif kind == "BBCAM" and self.on_cam is not None:
+            self.on_cam(fields)
         elif kind == "BBCOM" and "d" in fields:
             try:
                 m = Message.parse(bytes.fromhex(fields["d"]))

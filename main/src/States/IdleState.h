@@ -64,6 +64,9 @@ private:
 	void startEventRoutine(const EventBag::EventData& data);
 	void startScenario(const EventBag::EventData& data);
 	void maybeStartRandomRoutine();
+	bool startUserRoutine();   // fork: a requested or scheduled routine (Services/UserData.h)
+	bool quietNow() const;
+	uint64_t nextScheduleCheck = 0;
 	RoutineFactory pickRandomRoutine() const;
 	void rescheduleRandomRoutine();
 };

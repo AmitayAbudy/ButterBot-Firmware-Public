@@ -88,15 +88,9 @@ class AITab(tk.Frame):
                  bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 9)).pack(side="left", padx=10, pady=(4, 0))
         app.button(top, "How it works / setup guide", self._show_help, small=True).pack(side="right")
 
-        row = tk.Frame(self, bg=p["BG"])
-        row.pack(fill="x", padx=18, pady=(0, 6))
-        tk.Label(row, text="Robot port", bg=p["BG"], fg=p["DIM"]).pack(side="left")
+        row = tk.Frame(self, bg=p["BG"])  # not shown: the board bar at the top of the window picks the port
         self.port_var = tk.StringVar()
         self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=40)
-        self.port_box.pack(side="left", padx=(8, 6))
-        app.scan_button(row, p["BG"])
-        tk.Label(row, text="(only for steps 1 and 4 - the brain itself works over WiFi)", bg=p["BG"], fg=p["DIM"],
-                 font=("Segoe UI", 8)).pack(side="right", padx=8)
 
         # Step 1 (WiFi) sits on its own at the top and gates the rest: without it the robot can't reach the brain
         wifi_row = tk.Frame(self, bg=p["BG"])
@@ -276,7 +270,14 @@ class AITab(tk.Frame):
                                         "ticked it's also kept in Windows Credential Manager on this PC.")
         # The address the robot is given for the brain (Test robot WiFi and Start send it over USB)
         self.pc_ip_lbl = tk.Label(body, text="", bg=self.pal["PANEL"], fg=self.pal["DIM"], font=("Segoe UI", 8))
-        self.pc_ip_lbl.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.pc_ip_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        # Network addresses stay hidden unless asked for: people post screenshots
+        self.show_ip = tk.BooleanVar(value=False)
+        self.last_robot_ip: str | None = None
+        tk.Checkbutton(body, text="show addresses", variable=self.show_ip, command=lambda: self._show_pc_ip(
+            self.last_robot_ip), bg=self.pal["PANEL"], fg=self.pal["DIM"], selectcolor=self.pal["PANEL_HI"],
+            activebackground=self.pal["PANEL"], activeforeground=self.pal["GREEN"], highlightthickness=0,
+            font=("Segoe UI", 8)).grid(row=3, column=3, sticky="w", pady=(6, 0))
         self._show_pc_ip()
         self._fill_saved_password()
 
@@ -298,7 +299,17 @@ class AITab(tk.Frame):
                       f"Won't remember WiFi passwords" + (f" - the saved one for {ssid} is deleted." if ssid else "."), "")
 
     def _show_pc_ip(self, robot_ip: str | None = None):
+        self.last_robot_ip = robot_ip
         pc = brain.local_ip()
+        if not self.show_ip.get():
+            hidden = "this PC's address (hidden)"
+            text = f"{hidden} - sent to the robot so it can find the brain"
+            if robot_ip:
+                same = pc.rsplit(".", 1)[0] == robot_ip.rsplit(".", 1)[0]
+                text += " · robot is on " + ("the same network" if same else
+                                             "a different sub-network (fine, it uses this address directly)")
+            self.pc_ip_lbl.configure(text=text[:1].upper() + text[1:])
+            return
         text = f"This PC: {pc}:{brain.TALK_PORT} - sent to the robot so it can find the brain"
         if robot_ip:
             same = pc.rsplit(".", 1)[0] == robot_ip.rsplit(".", 1)[0]
@@ -691,7 +702,11 @@ class AITab(tk.Frame):
                                 personality_custom=self.cfg.get("ai_personality_custom", ""),
                                 owner_name=self.cfg.get("owner_name", ""),
                                 robot_name=self.cfg.get("robot_name", ""),
-                                facts=self.cfg.get("ai_facts", ""))
+                                facts=self.cfg.get("ai_facts", ""),
+                                memory_on=bool(self.cfg.get("ai_memory_on", True)),
+                                memory=list(self.cfg.get("ai_memory", [])),
+                                commands=[{"phrase": c["phrase"], "action": c.get("what", "runs one of the owner's own routines")}
+                                          for c in self.cfg.get("voice_commands", []) if c.get("phrase")])
         self.cfg.update(ai_provider=s.provider, ai_claude_model=s.claude_model, ai_ollama_model=s.ollama_model,
                         ai_whisper=s.whisper_model)
         core.save_config(self.cfg)
@@ -889,6 +904,8 @@ class AITab(tk.Frame):
                 self._say(self.hear_status, self.hear_lamp, prob, "bad")
             elif prob:
                 self._say(self.think_status, self.think_lamp, prob, "bad")
+        elif kind == "memory":
+            self.add_memories(value)
         elif kind == "robot":
             self.run_status.configure(text=f"Brain running on {brain.local_ip()}:{brain.TALK_PORT} · robot seen at {value}")
         elif kind == "turn":
@@ -934,6 +951,17 @@ class AITab(tk.Frame):
         self._quiet_robot_check()
         if self.server and self.server.running and self.robot_ai_var.get():
             self.set_ai(True, quiet=True)
+
+    def add_memories(self, notes: list[str]):
+        """The brain remembered something from a finished conversation: keep it (dated), newest last."""
+        today = time.strftime("%Y-%m-%d")
+        mem = list(self.cfg.get("ai_memory", [])) + [f"{today}: {n}" for n in notes]
+        self.cfg["ai_memory"] = mem[-brain.MEMORY_MAX:]
+        core.save_config(self.cfg)
+        self._say(self.run_status, self.run_lamp, "Remembered: " + " / ".join(notes), "ok")
+        if hasattr(self.app, "personalize_tab"):
+            self.app.personalize_tab.memory_changed()
+        self.personality_changed()
 
     def personality_changed(self):
         """Personalize tab saved names or a personality: a running brain uses them from the next question."""

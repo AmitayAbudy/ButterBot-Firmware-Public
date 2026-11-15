@@ -23,7 +23,7 @@ SCENARIOS = {
     "Dance": ("Fun", "Dance"),
     "OpenPortal": ("Fun", "Open a portal", "animation on the controller"),
     "WhatsThis": ("Fun", "What is this?", "camera object recognition"),
-    "CurrentTime": ("Fun", "Current time"),
+    "CurrentTime": ("Fun", "Current time", "reads the robot's clock - set it in the Routines tab"),
     "DiceRoll": ("Dice", "Roll dice"),
     "VoiceControl": ("Movement", "Move"),
     "FaceDetect": ("Faces", "Faces"),
@@ -103,6 +103,10 @@ def main():
             label = refine(scenario, data, label)
             if not note and cat in ("LED Module", "Climate Module"):
                 note = "needs the " + cat.replace("Module", "module")
+            if cat == "IR Remote":
+                note = "needs the IR module" + (f" - {note}" if note else "")
+            if not note and cat == "Phone":
+                note = "needs a phone connected to the robot"
             if not note and scenario == "IntruderDetectionOn" or scenario == "IntruderDetectionOff":
                 note = "needs the motion (PIR) module"
         key = (cat, label)

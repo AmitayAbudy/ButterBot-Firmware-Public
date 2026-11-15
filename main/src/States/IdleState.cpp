@@ -1,4 +1,5 @@
 #include "IdleState.h"
+#include <algorithm>
 #include <Core/Application.h>
 #include <Statics/ApplicationStatics.h>
 #include <Routines/MotionRoutine.h>
@@ -23,6 +24,9 @@
 #include "Routines/EventRoutines/GasConfiguredEventRoutine.h"
 #include "Routines/EventRoutines/SummonEventRoutine.h"
 #include "Routines/WanderRoutine.h"
+#include "Routines/UserRoutine.h"
+#include "Services/Time.h"
+#include "Services/UserData.h"
 
 DEFINE_LOG(IdleState)
 
@@ -136,6 +140,8 @@ void IdleState::tick(float deltaTime){
 	if(sm->getActiveRoutine() == nullptr){
 		if(eventPending){
 			startEventRoutine(eventBag->pop());
+		} else if(startUserRoutine()){
+			return;
 		} else{
 			maybeStartRandomRoutine();
 		}
@@ -214,6 +220,33 @@ void IdleState::startScenario(const EventBag::EventData& data){
 	sm->transitionTo<ScenarioState>();
 }
 
+bool IdleState::startUserRoutine(){
+	// Fork: a routine Dimension Hopper asked for, or one a schedule wants now (checked every few seconds)
+	int r = UserData::runRequest.exchange(-1);
+	const uint64_t now = millis();
+	if(r < 0 && now >= nextScheduleCheck){
+		nextScheduleCheck = now + 5000;
+		Time* time = ApplicationStatics::getApplication()->getService<Time>();
+		if(time != nullptr && time->isConfigured()){
+			const tm t = time->getTime();
+			r = UserData::dueSchedule(t);
+			if(r >= 0) printf("[BBSCHED] event=run routine=%d at=%02d:%02d\n", r, t.tm_hour, t.tm_min);
+		}
+	}
+	if(r < 0 || !ServiceLocator::ScenarioRoutineServiceInstance){
+		return false;
+	}
+	UserRoutine::pending = r;
+	ServiceLocator::ScenarioRoutineServiceInstance->setRoutineFactory(&makeRoutine<UserRoutine>);
+	sm->transitionTo<ScenarioState>();
+	return true;
+}
+
+bool IdleState::quietNow() const{
+	Time* time = ApplicationStatics::getApplication()->getService<Time>();
+	return time != nullptr && time->isConfigured() && UserData::isQuiet(time->getTime());
+}
+
 void IdleState::maybeStartRandomRoutine(){
 	if(AnyPowerRandomRoutines.empty() && UnpluggedRandomRoutines.empty()){
 		rescheduleRandomRoutine();
@@ -230,6 +263,12 @@ void IdleState::maybeStartRandomRoutine(){
 	}
 
 	if(millis() < nextRandomRoutineTime){
+		return;
+	}
+
+	// Fork: quiet hours (Routines tab) - no rambling, wandering or looking around
+	if(quietNow()){
+		rescheduleRandomRoutine();
 		return;
 	}
 
@@ -360,15 +399,18 @@ int64_t IdleState::getDynamicTickInterval() const{
 		}
 	}
 
+	// Fork: wake at least once a second, so a routine Dimension Hopper asked for or a schedule that's due starts
+	// promptly (it used to sleep until the next random routine - minutes - or for good with activity off)
+	static constexpr int64_t UserCheckMs = 1000;
 	if(activityMode == ActivityMode::Off){
-		return portMAX_DELAY;
+		return UserCheckMs;
 	}
 
 	if(millis() >= nextRandomRoutineTime){
 		return 0;
 	}
 
-	return nextRandomRoutineTime - millis();
+	return std::min<int64_t>(nextRandomRoutineTime - millis(), UserCheckMs);
 }
 
 void IdleState::onCommand(Ctrl::Command cmd){

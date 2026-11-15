@@ -47,6 +47,27 @@ runs locally: [Whisper](https://github.com/SYSTRAN/faster-whisper) turns speech 
 - WiFi is only switched on for a conversation and off again straight after, because it shares memory and the radio
   with Bluetooth.
 
+- Remembers past conversations (optional): a few short notes per chat, so it can ask how the maths test went. You
+  can read, edit or wipe them in Dimension Hopper.
+- "What time is it?" is answered by the robot's own clock, never guessed by the AI.
+
+### Your own routines, voice commands and schedules
+Made in Dimension Hopper's *Routines* tab and saved on the robot, so they work without the PC:
+- **Routines** - up to 12, each a list of up to 30 steps: say a line, run one of the robot's own actions (tell the
+  time, a joke, a fact, pass the butter, open a portal), drive, wait, dance, or set the LED add-on. Driving follows the
+  dance's safety rules (not while charging or tipped over; stops for an obstacle, an edge, being picked up, a button
+  press or a poke).
+- **Voice commands** - your own phrases that run a routine, recognised offline like the built-in ones (and in AI
+  conversations). Type the phrase, or let the robot learn how you say it with *Teach by voice*.
+- **Schedules** - run a routine on chosen days at a set time ("weekdays at 7:30, Good morning").
+- **Quiet hours** - no idle muttering or wandering at night; it still answers you.
+- **Clock** - set from the PC (automatically, or to any date and time for testing), used by schedules, quiet hours and
+  "what time is it?".
+
+### Backups
+Dimension Hopper backs up everything you've set up - voice, names, lines, routines, commands, schedules, the
+controller's theme, the AI personality and memories - into one file, and restores it onto the same or another robot.
+
 ### Voices
 Nine voice presets: **Classic** (the stock voice), Deep, High, Sassy, Deadpan, Robot (ring-modulated), Retro (8-bit),
 Announcer (with echo) and **Show accurate** - pitch, speed and sound measured from the episode's "What is my purpose?"
@@ -76,7 +97,8 @@ Announcer (with echo) and **Show accurate** - pitch, speed and sound measured fr
 ### USB console (used by Dimension Hopper)
 A status line every 5 seconds (battery, charging, controller link, free memory, why it last restarted, boot count), a
 live diagnostics stream, and commands for driving, voices, WiFi setup, network scan, AI mode, pairing, the emulated
-controller (`emu on`, `ctrl <hex>`) and memory/speed diagnostics (`tasks`, `heaps`; the status line reports the real
+controller (`emu on`, `ctrl <hex>`), routines (`rout`), voice commands (`cmds`), schedules (`sched`, `quiet`), the
+clock (`clock`), the camera (`cam`) and memory/speed diagnostics (`tasks`, `heaps`; the status line reports the real
 lowest free memory and any failed allocations). The protocol is plain text, so any serial terminal works too.
 
 ## Problems and ideas

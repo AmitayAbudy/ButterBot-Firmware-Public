@@ -26,7 +26,43 @@ TIPS = {
     "Apply": "Send these settings to the robot (it keeps them).",
     "Save names": "Save your name and the robot's name on the robot (and for the AI on this PC).",
     "Save lines": "Save your ramble lines on the robot (replaces the ones it has).",
-    "Save personality and facts": "Use this personality and these facts for AI conversations, from the next "
+    "▶ Camera": "Show what the robot's camera sees while you drive (USB only, 1-2 frames a second).",
+    "■ Camera": "Stop the camera picture.",
+    "Back up…": "Save everything you've personalized - robot, controller and this PC's AI settings - to one file. "
+                "WiFi passwords and API keys aren't included.",
+    "Restore…": "Put a backup back on the robot, the controller and this PC (after a factory reset, a bad flash, or "
+                "onto a second robot).",
+    # Routines tab
+    "New routine": "Start a routine in the first free slot (the very first one comes with an example to change).",
+    "Delete routine": "Delete the selected routine from the robot, with the voice commands and schedules that run it.",
+    "Add step": "Add this step after the selected one (or at the end).",
+    "Replace step": "Put this step in place of the selected one.",
+    "▲": "Move the selected step up.",
+    "▼": "Move the selected step down.",
+    "Remove step": "Take the selected step out of the routine.",
+    "Save to robot": "Save this routine on the robot - voice commands and schedules can run it from then on.",
+    "▶ Run on robot": "Run the saved routine on the robot now (press its button to stop it).",
+    "Add command": "Save this phrase on the robot as a new voice command for the chosen routine.",
+    "🎤 Teach by voice": "The robot listens three times while you say the phrase, and learns how you say it - for "
+                        "names and unusual words. AI mode is switched off while it listens and back on after. "
+                        "Then Add (or Update) the command.",
+    "Board port: ButterBot": "The robot's USB port. Every tab uses it. Scan finds it for you.",
+    "Board port: Controller": "The controller's USB port (for its theme, backups and flashing). Scan finds it for you.",
+    "Update command": "Change the selected voice command to this phrase and routine.",
+    "Delete command": "Delete the selected voice command from the robot.",
+    "Every day": "Tick all seven days.",
+    "Weekdays": "Tick Monday to Friday.",
+    "Weekends": "Tick Saturday and Sunday.",
+    "Add schedule": "Save a new schedule on the robot: these days, this time, this routine.",
+    "Update schedule": "Change the selected schedule to these days, time and routine.",
+    "Delete schedule": "Delete the selected schedule from the robot.",
+    "Save quiet hours": "Save the quiet-hours window on the robot (tick the box to switch it on).",
+    "Sync to PC time": "Set the robot's clock to this PC's time now.",
+    "Set this time": "Set the robot's clock to the date and time in the box - handy for testing schedules.",
+    "Use PC time": "Put this PC's current time back in the box.",
+    "Memories…":"See and edit what the robot remembers from past AI conversations, or make it forget everything.",
+    "Forget everything": "Delete every note the robot remembered from past conversations.",
+    "Save personality and facts":"Use this personality and these facts for AI conversations, from the next "
                                   "question. Kept on this PC.",
     "Apply & hear": "Save the pitch and speed nudges on the robot and hear a sample line (with Show accurate: just "
                     "hear it - its pitch and speed are fixed).",

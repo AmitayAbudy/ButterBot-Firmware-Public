@@ -28,12 +28,13 @@ from console_tab import ConsoleTab
 from controller_tab import ControllerTab
 from ai_tab import AITab
 from personalize_tab import PersonalizeTab
+from routines_tab import RoutinesTab
 from hop_dialog import HopDialog
 import tooltip
 from hopper_core import Kind
 
 APP_TITLE = "Dimension Hopper"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 ROBOT_REPO = "Exadon/ButterBot-Firmware-Public"
 CTRL_REPO = "Exadon/ButterBotCtrl-Firmware-Public"
 
@@ -504,6 +505,7 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.cfg = core.load_config()
+        self.version = VERSION
         self.q: queue.Queue = queue.Queue()
         self.busy = False
         self.monitor_ports: set[str] = set()  # ports held open by the Diagnostics tab (robot and controller)
@@ -515,20 +517,42 @@ class App:
         root.minsize(1080, 860)
         self._style()
 
-        # header
-        top = tk.Frame(root, bg=BG)
+        # header: full size on the Flash tab, a single slim line on the others (more room for the cards)
+        top = self.header = tk.Frame(root, bg=BG)
         top.pack(fill="x", padx=18, pady=(14, 6))
         self.portal = Portal(top, 150)
         self.portal.pack(side="left")
-        titles = tk.Frame(top, bg=BG)
+        titles = self.titles = tk.Frame(top, bg=BG)
         titles.pack(side="left", padx=16, fill="y")
-        tk.Label(titles, text="DIMENSION HOPPER", bg=BG, fg=GREEN, font=("Segoe UI Black", 30)).pack(anchor="w", pady=(18, 0))
-        tk.Label(titles, text="interdimensional firmware delivery  ·  ButterBot + Controller", bg=BG, fg=LIME,
-                 font=("Segoe UI Semibold", 11)).pack(anchor="w")
+        self.title_lbl = tk.Label(titles, text="DIMENSION HOPPER", bg=BG, fg=GREEN, font=("Segoe UI Black", 30))
+        self.title_lbl.pack(anchor="w", pady=(18, 0))
+        self.subtitle_lbl = tk.Label(titles, text="interdimensional firmware delivery  ·  ButterBot + Controller",
+                                     bg=BG, fg=LIME, font=("Segoe UI Semibold", 11))
+        self.subtitle_lbl.pack(anchor="w")
         self.headline = tk.Label(titles, text="Plug a board in over USB-C. I'll do the science.", bg=BG, fg=DIM,
                                  font=("Segoe UI", 10, "italic"))
         self.headline.pack(anchor="w", pady=(6, 0))
         self.button(top, "About", self.show_about, small=True).pack(side="right", anchor="n", pady=(6, 0))
+        self.compact = False
+
+        # Boards: one place to pick (or scan for) the robot's and the controller's port; every tab uses these
+        self.board_bar = tk.Frame(root, bg=PANEL, highlightbackground=EDGE, highlightthickness=1)
+        self.board_bar.pack(fill="x", padx=18, pady=(0, 8))
+        self.board_vars: dict[str, tk.StringVar] = {}
+        self.board_boxes: dict[str, ttk.Combobox] = {}
+        for kind, label in ((Kind.BOT, "ButterBot"), (Kind.CTRL, "Controller")):
+            tk.Label(self.board_bar, text=label, bg=PANEL, fg=GREEN, font=("Segoe UI Semibold", 10)).pack(
+                side="left", padx=(10, 6), pady=6)
+            var = self.board_vars[kind] = tk.StringVar()
+            box = self.board_boxes[kind] = ttk.Combobox(self.board_bar, textvariable=var, state="readonly",
+                                                         style="Hop.TCombobox", width=9)
+            box.pack(side="left", padx=(0, 14))
+            box.bind("<<ComboboxSelected>>", lambda e, k=kind: self._board_picked(k))
+            tooltip.attach(box, f"Board port: {label}")
+        self.button(self.board_bar, "⟳ Scan", self.scan_from_bar, small=True).pack(side="left")
+        self.bar_note = tk.Label(self.board_bar, text="", bg=PANEL, fg=DIM, font=("Segoe UI", 9))
+        self.bar_note.pack(side="left", padx=10)
+        self.scan_labels.append(self.bar_note)
 
         # "A new version is available" bar, shown under the header when the latest release has a newer app
         self.update_bar = tk.Frame(root, bg=PANEL_HI, highlightbackground=EDGE, highlightthickness=1)
@@ -549,18 +573,25 @@ class App:
         nb.add(flash, text="  Flash  ")
         pal = self.pal = dict(BG=BG, PANEL=PANEL, PANEL_HI=PANEL_HI, EDGE=EDGE, GREEN=GREEN, LIME=LIME, TEAL=TEAL,
                               DIM=DIM, TEXT=TEXT, WARN=WARN, BAD=BAD)
-        nb.add(GuideTab(nb, pal, load_art), text="  Guide  ")
-        self.personalize_tab = PersonalizeTab(nb, pal, self)
-        nb.add(self.personalize_tab, text="  Personalize  ")
-        self.diag_tab = DiagnosticsTab(nb, pal, self)
-        nb.add(self.diag_tab, text="  Diagnostics  ")
+        # Everyday tabs first, the technical ones (Diagnostics, Console) last
+        self.guide_tab = GuideTab(nb, pal, load_art, self)
+        nb.add(self.guide_tab, text="  Guide  ")
         self.controller_tab = ControllerTab(nb, pal, self)
         nb.add(self.controller_tab, text="  Controller  ")
-        self.console_tab = ConsoleTab(nb, pal, self)
-        nb.add(self.console_tab, text="  Console  ")
+        self.personalize_tab = PersonalizeTab(nb, pal, self)
+        nb.add(self.personalize_tab, text="  Personalize  ")
+        self.routines_tab = RoutinesTab(nb, pal, self)
+        nb.add(self.routines_tab, text="  Routines  ")
         self.ai_tab = AITab(nb, pal, self)
         nb.add(self.ai_tab, text="  AI  ")
+        self.diag_tab = DiagnosticsTab(nb, pal, self)
+        nb.add(self.diag_tab, text="  Diagnostics  ")
+        self.console_tab = ConsoleTab(nb, pal, self)
+        nb.add(self.console_tab, text="  Console  ")
         self._tab_order_init()
+        nb.bind("<<NotebookTabChanged>>", lambda e: self._header_for_tab(), add="+")
+        # Keep the window the size it opened at: the header shrinks on most tabs, and the window shouldn't jump
+        root.after(400, lambda: root.geometry(f"{root.winfo_width()}x{root.winfo_height()}"))
 
         # devices
         mid = tk.Frame(flash, bg=BG)
@@ -607,7 +638,7 @@ class App:
         self.log_txt.tag_configure("bad", foreground=BAD)
         self.log_txt.tag_configure("warn", foreground=WARN)
 
-        self.log(f"{APP_TITLE} {VERSION} online. Data lives in {core.APP_DIR}", "hi")
+        self.log(f"{APP_TITLE} {VERSION} online. Data lives in {core.short_path(core.APP_DIR)}", "hi")
         self.root.after(50, self._pump)
         self.refresh_ports(auto_assign=True)
         for s in self.slots.values():
@@ -779,6 +810,8 @@ class App:
                    "to update them, set up AI conversations and drive the robot from the PC.\n\n"
                    "Based on the original ButterBot firmware by CircuitMess (MIT License). An unofficial community "
                    "project, not made by or affiliated with CircuitMess.\n\n"
+                   "Voice commands use the CMU Pronouncing Dictionary (Copyright 1993-2015 Carnegie Mellon "
+                   "University, BSD-style licence - see CMUDICT_LICENSE in the source).\n\n"
                    "Tip: drag a tab left or right to reorder the tabs.")
         details = ["Robot firmware + this app:", "  github.com/" + ROBOT_REPO,
                    "Controller firmware:", "  github.com/" + CTRL_REPO]
@@ -903,8 +936,62 @@ class App:
                         kind="error"):
             self._open_update_page()
 
+    # --- header size and the shared board bar ---------------------------------------------------------------
+    def _header_for_tab(self):
+        """Full header on the Flash tab; on the others one slim line, so the cards get the room."""
+        try:
+            flash = self.nb.index(self.nb.select()) == self.nb.index(self.slots[Kind.BOT].master.master)
+        except (tk.TclError, AttributeError, KeyError):
+            return
+        compact = not flash
+        if compact == self.compact:
+            return
+        self.compact = compact
+        if compact:
+            self.portal.pack_forget()
+            self.subtitle_lbl.pack_forget()
+            self.headline.pack_forget()
+            self.title_lbl.configure(font=("Segoe UI Black", 15))
+            self.title_lbl.pack_configure(pady=(0, 0))
+            self.header.pack_configure(pady=(8, 6))
+            self.titles.pack_configure(padx=0)
+        else:
+            self.portal.pack(side="left", before=self.titles)
+            self.title_lbl.configure(font=("Segoe UI Black", 30))
+            self.title_lbl.pack_configure(pady=(18, 0))
+            self.subtitle_lbl.pack(anchor="w")
+            self.headline.pack(anchor="w", pady=(6, 0))
+            self.header.pack_configure(pady=(14, 6))
+            self.titles.pack_configure(padx=16)
+
+    def _board_picked(self, kind: str):
+        device = self.board_vars[kind].get()
+        if device:
+            self.port_found(kind, device)
+
+    def scan_from_bar(self):
+        """The bar's Scan: the open tab's own scan when it has one (it reads its board afterwards)."""
+        try:
+            tab = self.nb.nametowidget(self.nb.select())
+        except (tk.TclError, KeyError):
+            tab = None
+        if hasattr(tab, "find_robot"):
+            tab.find_robot()
+        else:
+            self.run_scan()
+
+    def _fill_board_bar(self, ports: list[core.PortInfo]):
+        devices = [p.device for p in ports]
+        for kind, box in self.board_boxes.items():
+            box.configure(values=devices)
+            if self.board_vars[kind].get() not in devices:
+                self.board_vars[kind].set(self.known_ports.get(kind, "") if self.known_ports.get(kind) in devices
+                                          else "")
+
     def refresh_ports(self, auto_assign=False) -> list[core.PortInfo]:
         ports = core.list_ports()
+        if hasattr(self, "board_boxes"):
+            self._fill_board_bar(ports)
         for s in self.slots.values():
             s.set_ports(ports)
         usb = [p for p in ports if p.is_usb]
@@ -930,13 +1017,17 @@ class App:
         if kind not in self.slots or not device:
             return
         self.known_ports[kind] = device
+        if kind in self.board_vars:
+            self.board_vars[kind].set(device)
         self.slots[kind].select_port(device)
-        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab, self.controller_tab):
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.routines_tab, self.console_tab,
+                    self.controller_tab):
             tab.use_port(kind, device)
 
     def _refresh_all_ports(self) -> list[core.PortInfo]:
         ports = self.refresh_ports()
-        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.console_tab, self.controller_tab):
+        for tab in (self.ai_tab, self.diag_tab, self.personalize_tab, self.routines_tab, self.console_tab,
+                    self.controller_tab):
             tab.refresh_ports()
         for kind, device in self.known_ports.items():
             if any(p.device == device for p in ports):
@@ -1453,7 +1544,7 @@ def tooltip_gaps() -> list[str]:
     import re
     labels = set()
     for f in ("dimension_hopper.py", "ai_tab.py", "diag_tab.py", "console_tab.py", "personalize_tab.py",
-              "controller_tab.py"):
+              "controller_tab.py", "routines_tab.py"):
         p = Path(__file__).with_name(f)
         if p.exists():
             labels |= set(re.findall(r'button\([^,]+, *"([^"]+)"', p.read_text(encoding="utf-8")))
@@ -1486,6 +1577,8 @@ def _selftest(out: str):
                      f"{len(brain.load_actions(Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / 'guide_data.json'))} actions")
     except Exception as e:  # noqa: BLE001
         lines.append(f"ai: MISSING {e!r}")
+    import phonemes
+    lines.append(f"phonemes: {phonemes.to_phonemes('party time')}")
     import controller_link
     lines.append(f"bluetooth: {controller_link.bluetooth_available()}")
     lines.append(f"self-update: can={self_update.can_self_update()} exe={self_update.exe_path().name} "

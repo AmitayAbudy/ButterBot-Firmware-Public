@@ -42,16 +42,16 @@ ROBOT_PARTS = [
 ]
 
 CONTROLLER_NOTES = [
-    "Joystick button: no function in this firmware.",
     "In menus the stick moves, Shut up selects, Override goes back.",
     "Settings is the first row of the menu.",
 ]
 
 
 class GuideTab(tk.Frame):
-    def __init__(self, master, pal: dict, load_art):
+    def __init__(self, master, pal: dict, load_art, app=None):
         super().__init__(master, bg=pal["BG"])
         self.pal = pal
+        self.app = app  # for the owner's own voice commands and whether AI mode is on (optional)
         self.load_art = load_art
         self.data = self._load_data()
 
@@ -150,6 +150,10 @@ class GuideTab(tk.Frame):
 
         tk.Label(card, text="Tap the robot's power button (or Summon on the controller) and say any phrase.",
                  bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=12)
+        self.ai_lbl = tk.Label(card, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 9), anchor="w",
+                               justify="left", wraplength=700)
+        self.ai_lbl.pack(fill="x", padx=12)
+        card.bind("<Configure>", lambda e: self.ai_lbl.configure(wraplength=e.width - 24), add="+")
 
         srow = tk.Frame(card, bg=p["PANEL"])
         srow.pack(fill="x", padx=12, pady=6)
@@ -195,7 +199,50 @@ class GuideTab(tk.Frame):
         det.bind("<Configure>", lambda e: (self.det_say.configure(wraplength=e.width - 24),
                                            self.det_reply.configure(wraplength=e.width - 24)))
         self._rows: dict[str, dict] = {}
+        self._own: list[dict] = []
         self._fill_tree()
+        # Each time the tab is shown: the owner's commands and AI mode may have changed in other tabs
+        self.bind("<Map>", lambda e: self.refresh(), add="+")
+
+    # --- what changes outside this tab --------------------------------------------------------------------
+    def _own_commands(self) -> list[dict]:
+        """The owner's own voice commands (Routines tab) as guide entries: from the robot when the Routines tab has
+        read it, otherwise the copy the AI brain keeps in the settings."""
+        if self.app is None:
+            return []
+        out = []
+        rt = getattr(self.app, "routines_tab", None)
+        if rt is not None and rt.robot_ok:
+            for routine, phrase, _ in rt.commands:
+                name = rt._routine_label(routine).split(". ", 1)[-1] if routine in rt.routines else "(deleted)"
+                out.append((phrase, name))
+        else:
+            for c in self.app.cfg.get("voice_commands", []):
+                what = c.get("what", "")
+                name = what.split('"')[1] if what.count('"') >= 2 else ""
+                out.append((c.get("phrase", ""), name))
+        return [{"category": "Your commands", "action": f"Run “{name}”" if name else "Your routine",
+                 "say": [phrase], "reply": "", "note": "your own - change it in the Routines tab"}
+                for phrase, name in out if phrase]
+
+    def _ai_on(self) -> bool:
+        ai = getattr(self.app, "ai_tab", None) if self.app is not None else None
+        server = getattr(ai, "server", None)
+        return bool(server is not None and server.running and ai.robot_ai_var.get())
+
+    def refresh(self):
+        if self._ai_on():
+            text = ("AI mode is on: just talk normally. ButterBot answers in its own words and still does every action "
+                    "below - your own commands too - when you ask for it.")
+            color = self.pal["GREEN"]
+        else:
+            text = ("With AI mode (AI tab) you can talk normally instead of using these exact phrases.")
+            color = self.pal["DIM"]
+        self.ai_lbl.configure(text=text, fg=color)
+        own = self._own_commands()
+        if own != self._own:
+            self._own = own
+            self._fill_tree()
 
     def _show_details(self):
         sel = self.tree.selection()
@@ -217,7 +264,11 @@ class GuideTab(tk.Frame):
         self._rows = {}
         cats: dict[str, str] = {}
         n = 0
-        for e in self.data["entries"]:
+        own = getattr(self, "_own", [])
+        if not own and self.app is not None and not q:
+            own = [{"category": "Your commands", "action": "(none yet)", "say": ["make your own in the Routines tab"],
+                    "reply": "", "note": "phrases that run your own routines", "placeholder": True}]
+        for e in own + self.data["entries"]:
             hay = " ".join([e["action"], e["reply"], e.get("note", ""), *e["say"]]).lower()
             if q and q not in hay:
                 continue
@@ -226,7 +277,9 @@ class GuideTab(tk.Frame):
                 cats[cat] = self.tree.insert("", "end", text=cat, open=bool(q), tags=("cat",))
             more = len(e["say"]) - 1
             example = e["say"][0] + (f"   (+{more} more)" if more > 0 else "")
-            if cat == "Chat":
+            if e.get("placeholder"):
+                label, example = e["action"], e["say"][0]
+            elif cat == "Chat":
                 label, example = e["say"][0], f"“{e['say'][0]}”"
             else:
                 label = e["action"]

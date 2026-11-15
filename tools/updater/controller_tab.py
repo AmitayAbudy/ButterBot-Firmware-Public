@@ -96,10 +96,12 @@ class ControllerTab(tk.Frame):
         row.pack(fill="x", padx=30, pady=(2, 6))
         self.port_var = tk.StringVar()
         self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=24)
-        self.port_box.pack(side="left")
-        scan_row = tk.Frame(left, bg=p["PANEL"])
-        scan_row.pack(fill="x", padx=30, pady=(0, 6))
-        app.scan_button(scan_row, p["PANEL"])
+        # The port itself comes from the board bar at the top of the window
+        self.port_note = tk.Label(row, text="Port: pick ButterBot at the top", bg=p["PANEL"], fg=p["DIM"],
+                                  font=("Segoe UI", 8))
+        self.port_note.pack(side="left")
+        self.port_var.trace_add("write", lambda *a: self.port_note.configure(
+            text=f"Port: {self.port_var.get().split(' ', 1)[0]}" if self.port_var.get() else "Port: pick ButterBot at the top"))
         self.ble_rb = tk.Radiobutton(left, text="Bluetooth (wireless, like the real controller)", variable=self.mode,
                                      value="ble", command=self._mode_changed, **self._rb())
         self.ble_rb.pack(anchor="w", padx=10, pady=(4, 0))
@@ -117,12 +119,11 @@ class ControllerTab(tk.Frame):
         note.pack(fill="x", padx=12, pady=(14, 8))
         tk.Label(note, text="ⓘ  One controller at a time", bg=p["PANEL_HI"], fg=p["WARN"],
                  font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=8, pady=(6, 2))
-        tk.Label(note, text="Over Bluetooth the robot only takes one controller. Switch the hardware controller "
-                            "off before connecting here; when you disconnect, it reconnects by itself (its pairing "
-                            "is kept).\n\nOver USB both work side by side.\n\nRC mode with the camera needs the "
-                            "hardware controller (it makes the WiFi hotspot); here the stick drives the robot "
-                            "directly.", bg=p["PANEL_HI"], fg=p["TEXT"], font=("Segoe UI", 8), wraplength=290,
-                 justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+        tk.Label(note, text="Over Bluetooth the robot only takes one controller: switch the hardware one off "
+                            "first (it reconnects by itself afterwards). Over USB both work side by side, and the "
+                            "camera below shows what the robot sees while you drive.", bg=p["PANEL_HI"], fg=p["TEXT"],
+                 font=("Segoe UI", 8), wraplength=290, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+        self._build_camera(left)
         tk.Label(left, text="Keys: Q override · E shut up · Z poke · C summon\nWASD / arrows: stick",
                  bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), justify="left").pack(anchor="w", padx=12)
 
@@ -373,11 +374,101 @@ class ControllerTab(tk.Frame):
                 self._ended()
         self.app.ui(ui)
 
+    # --- camera (USB only: the robot sends JPEG frames over its console, like the Diagnostics tab) ------------
+    CAM_SIZE = 192          # the robot's 128 px frames, scaled up
+    CAM_RETRY_S = 1.0
+    CAM_TIMEOUT_S = 6.0
+
+    def _build_camera(self, parent):
+        p = self.pal
+        row = tk.Frame(parent, bg=p["PANEL"])
+        row.pack(fill="x", padx=12, pady=(0, 4))
+        tk.Label(row, text="CAMERA", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).pack(side="left")
+        self.cam_btn = self.app.button(row, "▶ Camera", self.toggle_camera, small=True)
+        self.cam_btn.pack(side="right")
+        box = tk.Frame(parent, bg="#040705", width=self.CAM_SIZE, height=self.CAM_SIZE)
+        box.pack(padx=12, anchor="w")
+        box.pack_propagate(False)
+        self.cam_view = tk.Label(box, bg="#040705", text="USB only", fg=p["DIM"], font=("Segoe UI", 9))
+        self.cam_view.pack(fill="both", expand=True)
+        self.cam_lbl = tk.Label(parent, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), wraplength=300,
+                                justify="left")
+        self.cam_lbl.pack(anchor="w", padx=12, pady=(2, 8))
+        self.cam_on = False
+        self.cam_photo = None
+        self.cam_asked = 0.0
+        self.cam_times: list[float] = []
+
+    def toggle_camera(self):
+        if self.cam_on:
+            self._camera_off("Stopped.")
+            return
+        if not isinstance(self.link, cl.UsbLink) or not self.link.connected:
+            self.cam_lbl.configure(text="Connect over USB first - over Bluetooth there's no camera picture.",
+                                   fg=self.pal["WARN"])
+            return
+        self.cam_on = True
+        self.cam_times = []
+        self.link.on_cam = lambda f: self.app.ui(lambda: self._camera_reply(f))
+        tooltip.relabel(self.cam_btn, "■ Camera")
+        self.cam_lbl.configure(text="Waiting for the first frame…", fg=self.pal["DIM"])
+        self._camera_ask()
+        self.after(1000, self._camera_watch)
+
+    def _camera_off(self, why: str):
+        self.cam_on = False
+        if isinstance(self.link, cl.UsbLink):
+            self.link.on_cam = None
+        tooltip.relabel(self.cam_btn, "▶ Camera")
+        self.cam_lbl.configure(text=why, fg=self.pal["DIM"])
+
+    def _camera_ask(self):
+        if self.cam_on and isinstance(self.link, cl.UsbLink) and self.link.connected:
+            self.link.session.send("cam")
+            self.cam_asked = time.time()
+
+    def _camera_watch(self):
+        if not self.cam_on:
+            return
+        if time.time() - self.cam_asked > self.CAM_TIMEOUT_S:
+            self._camera_ask()
+        self.after(1000, self._camera_watch)
+
+    def _camera_reply(self, fields: dict):
+        if not self.cam_on:
+            return
+        p = self.pal
+        if "jpg" in fields:
+            try:
+                import base64
+                import io
+                from PIL import Image, ImageTk
+                img = Image.open(io.BytesIO(base64.b64decode(fields["jpg"])))
+                img.load()
+                self.cam_photo = ImageTk.PhotoImage(img.resize((self.CAM_SIZE, self.CAM_SIZE), Image.BILINEAR))
+                self.cam_view.configure(image=self.cam_photo, text="")
+                now = time.time()
+                self.cam_times = [t for t in self.cam_times if now - t < 5] + [now]
+                fps = (len(self.cam_times) - 1) / max(0.001, self.cam_times[-1] - self.cam_times[0]) \
+                    if len(self.cam_times) > 1 else 0
+                self.cam_lbl.configure(text=f"Live · {fps:.1f} frames/s (USB is slow - drive gently)", fg=p["GREEN"])
+            except Exception:  # noqa: BLE001 - a garbled line: ask for the next one
+                pass
+            self._camera_ask()
+        else:
+            why = {"routine": "the robot is busy with something", "state": "the robot isn't idle",
+                   "facedet": "face recognition is using the camera", "working": "still sending the last frame"}.get(
+                fields.get("why", ""), fields.get("why", "camera error"))
+            self.cam_lbl.configure(text=f"Paused: {why}. Retrying…", fg=p["WARN"])
+            self.after(int(self.CAM_RETRY_S * 1000), self._camera_ask)
+
     def _ended(self):
         if self.link_port:
             self.app.monitor_ports.discard(self.link_port)
             self.link_port = ""
         self.link = None
+        if self.cam_on:
+            self._camera_off("Disconnected.")
         tooltip.relabel(self.connect_btn, "Connect")
         self._paint()
 
@@ -393,7 +484,7 @@ class ControllerTab(tk.Frame):
         if self.mode.get() == "usb":
             port = self.port_var.get().split(" ", 1)[0]
             if not port:
-                self.state_lbl.configure(text="Pick the robot's port (or hit Scan).", fg=self.pal["WARN"])
+                self.state_lbl.configure(text="Pick ButterBot's port at the top (or hit Scan there).", fg=self.pal["WARN"])
                 return
             if self.app.port_in_use(port) or self.app.busy:
                 return

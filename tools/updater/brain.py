@@ -12,6 +12,7 @@ Discovery: the robot broadcasts "BBBRAIN?" on UDP DISCOVERY_PORT; we answer "BBB
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -68,6 +69,9 @@ class BrainSettings:
     owner_name: str = ""
     robot_name: str = ""
     facts: str = ""                    # things about the owner, one per line (Personalize tab)
+    memory_on: bool = True             # remember past conversations (a few dated notes, kept on this PC)
+    memory: list = field(default_factory=list)   # those notes, oldest first: "2026-11-15: has a maths test Friday"
+    commands: list = field(default_factory=list)  # the owner's own voice commands: {"phrase", "action"}, offered as actions
 
 
 # How the robot talks (Personalize tab). "classic" is the persona above, unchanged.
@@ -84,6 +88,9 @@ PERSONALITIES = {
 }
 CUSTOM_MAX = 400
 FACTS_MAX = 600
+MEMORY_MAX = 40          # notes kept; the oldest go first
+MEMORY_IN_PROMPT = 20    # the newest ones the brain sees
+MEMORY_GAP_S = 300       # this long without a question ends a conversation (and it gets remembered)
 
 
 def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
@@ -107,8 +114,24 @@ def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
     if facts:
         extra.append("Things you know about your owner (bring one up now and then when it fits naturally - don't "
                      f"list them, and don't mention them every time): {facts}")
-    persona =PERSONA + ("\n" + "\n".join(extra) + "\n" if extra else "")
-    return persona + "\n\n" + actions_prompt(actions)
+    if settings.memory_on:
+        extra.append("Today is " + time.strftime("%A %d %B %Y").replace(" 0", " ") + ".")
+        notes = [" ".join(str(n).split())[:160] for n in settings.memory[-MEMORY_IN_PROMPT:]]
+        notes = [n for n in notes if n]
+        if notes:
+            extra.append("What you remember from earlier conversations with your owner, dated (now and then, when it "
+                         "fits, follow one up - e.g. ask how something went - but don't recite them, and never "
+                         "mention more than one at a time):\n- " + "\n- ".join(notes))
+    persona = PERSONA + ("\n" + "\n".join(extra) + "\n" if extra else "")
+    own = [c for c in settings.commands if c.get("phrase")]
+    text = persona + "\n\n" + actions_prompt(actions + own)
+    if clock := time_action(actions):
+        text += (f'\n\nYou don\'t know the time - never say one. When asked the time, pick "{clock}" and leave "say" '
+                 "empty: your clock says it.")
+    if own:
+        text += ("\n\nYour owner made some of these actions themselves - when they say one of these phrases (even "
+                 "roughly), always pick it: " + ", ".join(f'"{c["phrase"]}"' for c in own) + ".")
+    return text
 
 
 @dataclass
@@ -195,10 +218,55 @@ def load_actions(guide_path: Path) -> list[dict]:
     return out
 
 
+# "What time is it?" and friends. The robot's clock answers these itself (its "current time" action), because a model
+# has no idea what time it is and happily makes one up. Narrow on purpose: "what time is dinner?" isn't one.
+TIME_QUESTION = re.compile(r"\btime is it\b|\bwhat time it is\b|\bwhat(?:'s| is) the (?:current )?time\b|\btell me the time\b"
+                           r"|\b(?:know|have|got) the time\b|\bcurrent time\b|\btime (?:is it )?(?:right )?now\b",
+                           re.IGNORECASE)
+TIME_TRIGGER = "what time is it"   # an activation string of the robot's own time action (guide_data.json)
+
+
+def time_action(actions: list[dict]) -> str:
+    """The phrase of the robot's own "tell the time" action, or "" when this robot doesn't have one."""
+    return next((a["phrase"] for a in actions if TIME_TRIGGER in a.get("triggers", [a["phrase"]])), "")
+
+
 def actions_prompt(actions: list[dict]) -> str:
-    lines = [f'- "{a["phrase"]}": {a["action"]}' for a in actions]
+    lines = [f'- "{a["phrase"]}": {a.get("action", "")}' for a in actions]
     return "Actions (use the quoted phrase exactly):\n" + "\n".join(lines)
 
+
+MEMORY_SCHEMA = {
+    "type": "object",
+    "properties": {"notes": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"quote": {"type": "string"}, "note": {"type": "string"}},
+        "required": ["quote", "note"],
+        "additionalProperties": False}}},
+    "required": ["notes"],
+    "additionalProperties": False,
+}
+
+
+def _short(path: str) -> str:
+    """No Windows user name on screen (people post screenshots)."""
+    import os
+    for var in ("LOCALAPPDATA", "APPDATA", "USERPROFILE"):
+        base = os.environ.get(var)
+        if base and path.lower().startswith(base.lower()):
+            return f"%{var}%" + path[len(base):]
+    return path
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in "".join(c.lower() if c.isalnum() or c == "'" else " " for c in text).split() if w}
+
+
+def _similar(a: str, b: str) -> bool:
+    """Two notes saying much the same (most of the shorter one's words are in the other)."""
+    wa, wb = _words(a), _words(b)
+    small = min(len(wa), len(wb))
+    return small > 0 and len(wa & wb) >= 0.7 * small
 
 REPLY_SCHEMA = {
     "type": "object",
@@ -221,13 +289,23 @@ class Thinker:
         self.actions = actions
         self.phrases = {t for a in actions for t in a.get("triggers", [a["phrase"]])}
         self.system = build_system(settings, actions)
+        self.phrases |= {c["phrase"] for c in settings.commands if c.get("phrase")}
         self.history: list[dict] = []   # recent exchanges, so follow-ups make sense
         self.last_at = 0.0
+        self.finished: list[list[dict]] = []   # ended conversations waiting to be remembered
+        self.lock = threading.Lock()
 
     def _messages(self, heard: str) -> list[dict]:
-        if time.time() - self.last_at > 300:  # five quiet minutes: start a fresh conversation
-            self.history = []
-        return self.history[-8:] + [{"role": "user", "content": heard}]
+        with self.lock:
+            if time.time() - self.last_at > MEMORY_GAP_S:  # five quiet minutes: start a fresh conversation
+                self.end_conversation()
+            return self.history[-8:] + [{"role": "user", "content": heard}]
+
+    def end_conversation(self):
+        """Moves the current conversation to the to-remember list (call with self.lock held)."""
+        if self.history:
+            self.finished.append(self.history)
+        self.history = []
 
     def _remember(self, heard: str, reply: dict):
         self.history += [{"role": "user", "content": heard},
@@ -274,15 +352,102 @@ class Thinker:
         with urllib.request.urlopen(req, timeout=180) as r:
             r.read()
 
+    def own_command(self, heard: str) -> str:
+        """The owner's own voice command in what was heard, or "": every word of its phrase is there (small models
+        often miss these among the many built-in actions, and the owner expects their exact phrase to work)."""
+        words = _words(heard)
+        best = ""
+        for c in self.settings.commands:
+            phrase = c.get("phrase", "")
+            need = _words(phrase)
+            if need and need <= words and len(phrase) > len(best):
+                best = phrase
+        return best
+
     def think(self, heard: str) -> dict:
+        own = self.own_command(heard)
+        clock = time_action(self.actions)
+        if not own and clock and TIME_QUESTION.search(heard):
+            # The robot's clock speaks the time; no model call (it would only guess one, and it saves a few seconds)
+            clean = {"say": "", "action": clock}
+            self._remember(heard, clean)
+            return clean
         reply = self._claude(heard) if self.settings.provider == "claude" else self._ollama(heard)
         say = " ".join(str(reply.get("say", "")).split())[:300]
         action = str(reply.get("action", "")).strip().lower()
         if action and action not in self.phrases:
             action = ""
+        if own:
+            action = own
+        elif action == clock and clock:
+            say = ""  # the clock says the time; anything the model adds is a guess at it
         clean = {"say": say, "action": action}
         self._remember(heard, clean)
         return clean
+
+    # --- memory -------------------------------------------------------------------------------
+    def summarize(self, history: list[dict]) -> list[str]:
+        """A few short notes worth remembering from one finished conversation (often none)."""
+        lines = []
+        for m in history:
+            if m["role"] == "user":
+                lines.append("Owner: " + m["content"])
+            else:
+                try:
+                    lines.append("Robot: " + json.loads(m["content"]).get("say", ""))
+                except ValueError:
+                    lines.append("Robot: " + m["content"])
+        known = [n.split(": ", 1)[-1] for n in self.settings.memory[-MEMORY_IN_PROMPT:]]
+        prompt = ("Below is a short spoken conversation between a person (Owner) and their toy robot (Robot). Decide "
+                  "what, if anything, the robot should remember about the owner for future conversations.\n"
+                  "Only note facts the OWNER stated about their own life: plans or events coming up, things they did, "
+                  "how they felt, likes and dislikes, people and pets in their life. Each note: one short sentence in "
+                  "the third person, under 20 words, at most 2 notes. For each note, \"quote\" is the owner's exact "
+                  "words it comes from, copied from an Owner line below.\n"
+                  "Never note: requests or commands to the robot (dance, jokes, lights...), questions, small talk, "
+                  "anything the robot said, or anything not literally in this conversation. Most conversations have "
+                  "nothing worth remembering - then return an empty list.\n"
+                  + ("Already remembered (don't repeat these): " + "; ".join(known) + "\n" if known else "")
+                  + "\nConversation:\n" + "\n".join(lines))
+        owner_words = _words(" ".join(m["content"] for m in history if m["role"] == "user"))
+        if self.settings.provider == "claude":
+            import anthropic
+            key = load_api_key()
+            if not key:
+                return []
+            client = anthropic.Anthropic(api_key=key, timeout=30.0, max_retries=1)
+            response = client.beta.messages.create(
+                model=self.settings.claude_model, max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+                output_config={"effort": "low", "format": {"type": "json_schema", "schema": MEMORY_SCHEMA}})
+            text = next((b.text for b in response.content if b.type == "text"), "")
+        else:
+            body = {"model": self.settings.ollama_model, "stream": False, "format": MEMORY_SCHEMA,
+                    "options": {"temperature": 0.2}, "keep_alive": "60m",
+                    "messages": [{"role": "user", "content": prompt + "\n\nAnswer as JSON: "
+                                  "{\"notes\": [{\"quote\": ..., \"note\": ...}]}"}]}
+            req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/chat",
+                                         data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                text = json.loads(r.read().decode("utf-8")).get("message", {}).get("content", "")
+        try:
+            notes = json.loads(text).get("notes", []) if text else []
+        except ValueError:
+            return []
+        out = []
+        for n in notes[:2]:
+            if not isinstance(n, dict):
+                continue
+            # Small local models make things up when there's nothing to remember: keep a note only if its quote
+            # really is the owner's words (most of them, allowing for small slips), and isn't something we know
+            quote = _words(str(n.get("quote", "")))
+            note = " ".join(str(n.get("note", "")).split())[:160]
+            if not note or len(quote) < 2 or sum(w in owner_words for w in quote) < 0.8 * len(quote):
+                continue
+            if any(_similar(note, k) for k in known + out):
+                continue
+            out.append(note)
+        return out
 
     def _claude(self, heard: str) -> dict:
         import anthropic
@@ -389,9 +554,9 @@ def whisper_cache_dir() -> str:
 
 def describe_whisper_source(name: str, source: str) -> str:
     if not source:
-        return f"Source: Hugging Face - huggingface.co/{whisper_repo(name)} (public, MIT licence). Kept in {whisper_cache_dir()}"
+        return f"Source: Hugging Face - huggingface.co/{whisper_repo(name)} (public, MIT licence). Kept in {_short(whisper_cache_dir())}"
     if source.startswith(("http://", "https://")):
-        return f"Source: mirror {source} ({whisper_repo(name)}). Kept in {whisper_cache_dir()}"
+        return f"Source: mirror {source} ({whisper_repo(name)}). Kept in {_short(whisper_cache_dir())}"
     return f"Source: folder on this PC - {source} (nothing is downloaded)"
 
 
@@ -467,7 +632,8 @@ class BrainServer:
         self.ready = threading.Event()      # set once everything is loaded and primed
         self.problem = ""                    # why warm-up failed ("" = it works)
         self.guide_path = guide_path
-        self.on_event = on_event  # ("status", str) | ("turn", Turn) | ("error", str) | ("robot", ip)
+        # ("status", str) | ("turn", Turn) | ("error", str) | ("robot", ip) | ("memory", [notes])
+        self.on_event = on_event
         self.ears = Ears()
         self.thinker: Optional[Thinker] = None
         self._stop = threading.Event()
@@ -492,7 +658,7 @@ class BrainServer:
         self._udp.bind(("0.0.0.0", DISCOVERY_PORT))
         self._udp.settimeout(0.5)
         self.running = True
-        for fn in (self._discovery_loop, self._talk_loop, self._warm_up):
+        for fn in (self._discovery_loop, self._talk_loop, self._warm_up, self._memory_loop):
             t = threading.Thread(target=fn, daemon=True)
             t.start()
             self._threads.append(t)
@@ -501,6 +667,10 @@ class BrainServer:
     def stop(self):
         self._stop.set()
         self.running = False
+        if self.thinker and self.settings.memory_on:  # remember the conversation that was still going
+            with self.thinker.lock:
+                self.thinker.end_conversation()
+            threading.Thread(target=self._remember_finished, daemon=True).start()
         for s in (self._tcp, self._udp):
             try:
                 if s:
@@ -514,9 +684,14 @@ class BrainServer:
         if self.thinker:
             self.thinker.settings = settings
             new = build_system(settings, self.thinker.actions)
-            if new != self.thinker.system:  # names / personality changed: start a fresh conversation
+            self.thinker.phrases = {t for a in self.thinker.actions for t in a.get("triggers", [a["phrase"]])} | \
+                {c["phrase"] for c in settings.commands if c.get("phrase")}
+            if new != self.thinker.system:  # names / personality / memory changed
                 self.thinker.system = new
-                self.thinker.history = []
+                if not settings.memory_on:
+                    with self.thinker.lock:
+                        self.thinker.history = []
+                        self.thinker.finished = []
 
     def _warm_up(self):
         """Loads and primes everything before saying "ready", so the first question is as quick as the rest."""
@@ -566,6 +741,32 @@ class BrainServer:
                     self.on_event("robot", addr[0])
                 except OSError:
                     pass
+
+    def _memory_loop(self):
+        """Every few seconds: a conversation that has gone quiet is over - turn it into notes to remember."""
+        while not self._stop.wait(10):
+            t = self.thinker
+            if t is None or not self.settings.memory_on:
+                continue
+            with t.lock:
+                if t.history and time.time() - t.last_at > MEMORY_GAP_S:
+                    t.end_conversation()
+            self._remember_finished()
+
+    def _remember_finished(self):
+        t = self.thinker
+        if t is None:
+            return
+        with t.lock:
+            todo, t.finished = t.finished, []
+        for history in todo:
+            try:
+                notes = t.summarize(history)
+            except Exception as e:  # noqa: BLE001 - memory is a nice-to-have; never break the brain over it
+                self.on_event("status", f"Couldn't make a memory of that conversation ({str(e)[:80]})")
+                continue
+            if notes:
+                self.on_event("memory", notes)
 
     def _talk_loop(self):
         while not self._stop.is_set():
@@ -671,8 +872,8 @@ class BrainServer:
 
     # --- test from the UI (typed text, no robot) ---------------------------------------------
     def test_text(self, text: str) -> dict:
-        thinker = self.thinker or Thinker(self.settings, load_actions(self.guide_path))
-        return thinker.think(text)
+        # A separate thinker: typed tests aren't part of the robot's conversation (or its memories)
+        return Thinker(self.settings, self.thinker.actions if self.thinker else load_actions(self.guide_path)).think(text)
 
 
 def local_ip() -> str:

@@ -13,11 +13,14 @@ the other tabs.
 """
 from __future__ import annotations
 
+import json
 import random
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 
+import backup as backup_mod
 import brain
 import hopper_core as core
 import tooltip
@@ -65,6 +68,10 @@ class PersonalizeTab(tk.Frame):
         tk.Label(top, text="PERSONALIZE", bg=p["BG"], fg=p["GREEN"], font=("Segoe UI Black", 13)).pack(side="left")
         tk.Label(top, text="settings saved on the robot and the controller - they stay after updates", bg=p["BG"],
                  fg=p["DIM"], font=("Segoe UI", 9)).pack(side="left", padx=10, pady=(4, 0))
+        app.button(top, "Restore…", self.restore, small=True).pack(side="right")
+        app.button(top, "Back up…", self.backup, small=True).pack(side="right", padx=6)
+        self.backup_lbl = tk.Label(top, text="", bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 8))
+        self.backup_lbl.pack(side="right", padx=6)
 
         # Which board is where. Cards that need a board stay greyed out until that board answers.
         self.robot_ok = False
@@ -75,26 +82,26 @@ class PersonalizeTab(tk.Frame):
         self.port_var = tk.StringVar()
         self.port_box = ttk.Combobox(ports, textvariable=self.port_var, state="readonly", style="Hop.TCombobox",
                                      width=40)
-        self.port_box.grid(row=0, column=1, padx=(0, 6), pady=2)
-        self.port_box.bind("<<ComboboxSelected>>", lambda e: self.read_voice())
+        # (not shown: the board bar at the top of the window picks the port)
         self.port_lbl = tk.Label(ports, text="Plug the robot in by USB and switch it on.", bg=p["BG"], fg=p["DIM"],
                                  font=("Segoe UI", 8))
-        self.port_lbl.grid(row=0, column=3, sticky="w", padx=8)
+        self.port_lbl.grid(row=0, column=1, sticky="w")
         tk.Label(ports, text="Controller", bg=p["BG"], fg=p["DIM"], width=9, anchor="w").grid(row=1, column=0,
                                                                                               sticky="w")
         self.ctrl_var = tk.StringVar()
         self.ctrl_box = ttk.Combobox(ports, textvariable=self.ctrl_var, state="readonly", style="Hop.TCombobox",
                                      width=40)
-        self.ctrl_box.grid(row=1, column=1, padx=(0, 6), pady=2)
-        self.ctrl_box.bind("<<ComboboxSelected>>", lambda e: self.read_ctrl())
         self.ctrl_lbl = tk.Label(ports, text="Plug the controller in by USB and switch it on (for its theme).",
                                  bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 8))
-        self.ctrl_lbl.grid(row=1, column=3, sticky="w", padx=8)
-        app.button(ports, "⟳ Scan", self.find_robot, small=True).grid(row=0, column=2, rowspan=2, sticky="ns",
-                                                                       pady=2)
+        self.ctrl_lbl.grid(row=1, column=1, sticky="w")
 
+        # One notice for the whole tab (not one per card) while the robot hasn't answered
+        self.need_lbl = tk.Label(self, text="🔒  Voice, start-up line, ramble lines and chat replies need the robot:"
+                                 " plug it in by USB, switch it on and hit Scan at the top.",
+                                 bg=p["PANEL_HI"], fg=p["WARN"], font=("Segoe UI Semibold", 9),
+                                 anchor="w", padx=10, pady=5)
         # The cards scroll: there are more than fit on a small screen
-        body = tk.Frame(self, bg=p["BG"])
+        body = self.body = tk.Frame(self, bg=p["BG"])
         body.pack(fill="both", expand=True, padx=(18, 4), pady=(0, 10))
         canvas = tk.Canvas(body, bg=p["BG"], highlightthickness=0)
         sb = ttk.Scrollbar(body, command=canvas.yview, style="Hop.Vertical.TScrollbar")
@@ -198,10 +205,9 @@ class PersonalizeTab(tk.Frame):
         self._build_rambles()
         self._build_chat()
         self._build_personality()
-        for c, needs in ((self.voice_card, "robot"), (self.start_card, "robot"), (self.ramble_card, "robot"),
-                         (self.chat_card, "robot"), (self.theme_card, "controller")):
-            c._gate = tk.Label(c, text=f"🔒  Needs the {needs} - plug it in by USB, switch it on and hit Scan.",
-                               bg=p["PANEL"], fg=p["WARN"], font=("Segoe UI", 8))
+        self.theme_card._gate = tk.Label(self.theme_card, text="🔒  Needs the controller - plug it in by USB, "
+                                         "switch it on and hit Scan at the top.", bg=p["PANEL"], fg=p["WARN"],
+                                         font=("Segoe UI", 8))
         self._gate_all()
 
         self.refresh_ports()
@@ -263,6 +269,10 @@ class PersonalizeTab(tk.Frame):
         if hasattr(self, "lock_lbl"):
             self._apply_lock()
         self._gate(self.theme_card, self.ctrl_ok)
+        if self.robot_ok:
+            self.need_lbl.pack_forget()
+        elif not self.need_lbl.winfo_ismapped():
+            self.need_lbl.pack(fill="x", padx=18, pady=(0, 8), before=self.body)
 
     def _robot_answered(self, ok: bool):
         if ok != self.robot_ok:
@@ -289,7 +299,7 @@ class PersonalizeTab(tk.Frame):
     def _port(self) -> str | None:
         port = self.port_var.get().split(" ", 1)[0]
         if not port:
-            self._say("Pick the robot's port above, or hit Scan.", "WARN")
+            self._say("Pick ButterBot's port at the top, or hit Scan there.", "WARN")
             self._robot_answered(False)
             return None
         if self.app.port_in_use(port) or self.app.busy:
@@ -877,11 +887,159 @@ class PersonalizeTab(tk.Frame):
                              insertbackground=p["GREEN"], font=("Segoe UI", 9), wrap="word")
         self.facts.insert("1.0", self.app.cfg.get("ai_facts", ""))
         self.facts.pack(fill="x", padx=12)
+        mem = tk.Frame(card, bg=p["PANEL"])
+        mem.pack(fill="x", padx=12, pady=(8, 0))
+        self.mem_var = tk.BooleanVar(value=bool(self.app.cfg.get("ai_memory_on", True)))
+        cb = tk.Checkbutton(mem, text="Remember past conversations", variable=self.mem_var, command=self.save_memory_on,
+                            bg=p["PANEL"], fg=p["TEXT"], selectcolor=p["PANEL_HI"], activebackground=p["PANEL"],
+                            activeforeground=p["GREEN"], highlightthickness=0, font=("Segoe UI Semibold", 9))
+        cb.pack(side="left")
+        tooltip.Tooltip(cb, "After each AI conversation the brain notes anything worth remembering about you (a test on "
+                            "Friday, a new puppy) and brings it up later. Notes stay on this PC.")
+        self.app.button(mem, "Memories…", self.edit_memories, small=True).pack(side="left", padx=(10, 0))
+        self.mem_lbl = tk.Label(mem, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8))
+        self.mem_lbl.pack(side="left", padx=10)
+        self.memory_changed()
         bottom = tk.Frame(card, bg=p["PANEL"])
         bottom.pack(fill="x", padx=12, pady=(6, 10))
         self.app.button(bottom, "Save personality and facts", self.save_personality, small=True).pack(side="left")
         self.pers_lbl = tk.Label(bottom, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8))
         self.pers_lbl.pack(side="left", padx=10)
+
+    # --- backup and restore (backup.py) ----------------------------------------------------------------------
+    def _ports_for_backup(self) -> tuple[str | None, str | None] | None:
+        bot = self.port_var.get().split(" ", 1)[0] or None
+        ctrl = self.ctrl_var.get().split(" ", 1)[0] or None
+        if self.app.busy or self.working:
+            self.backup_lbl.configure(text="Busy - try again in a moment.", fg=self.pal["WARN"])
+            return None
+        for port in (bot, ctrl):
+            if port and self.app.port_in_use(port):
+                self.backup_lbl.configure(text=f"{port} is in use (Diagnostics, Console or Controller tab) - free it "
+                                               "first.", fg=self.pal["WARN"])
+                return None
+        return bot, ctrl
+
+    def backup(self):
+        """Everything personalized (robot, controller, this PC's AI settings) into one file."""
+        ports = self._ports_for_backup()
+        if ports is None:
+            return
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(parent=self, title="Back up ButterBot settings", defaultextension=".json",
+                                            initialfile=time.strftime("butterbot-backup-%Y-%m-%d.json"),
+                                            filetypes=[("Dimension Hopper backup", "*.json")])
+        if not path:
+            return
+        say = lambda t: self.app.ui(lambda: self.backup_lbl.configure(text=t, fg=self.pal["DIM"]))
+
+        def work():
+            data, notes = backup_mod.collect(*ports, self.app.cfg, getattr(self.app, "version", "?"), say)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1, ensure_ascii=False)
+
+            def ui():
+                self.backup_lbl.configure(text="Backed up." if not notes else "Backed up (with gaps).",
+                                          fg=self.pal["GREEN"] if not notes else self.pal["WARN"])
+                self.app.info("\n".join(backup_mod.summary(data) + ([""] + ["Note: " + n for n in notes] if notes else [])
+                                        + ["", f"Saved to {path}"]), "Backed up")
+            self.app.ui(ui)
+        self.app.job("Backup", work)
+
+    def restore(self):
+        ports = self._ports_for_backup()
+        if ports is None:
+            return
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(parent=self, title="Restore ButterBot settings",
+                                          filetypes=[("Dimension Hopper backup", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            lines = backup_mod.summary(data)
+        except (OSError, ValueError, AttributeError) as e:
+            self.app.error(f"Couldn't read that file: {e}")
+            return
+        missing = [w for w, k, port in (("robot", "robot", ports[0]), ("controller", "controller", ports[1]))
+                   if data.get(k) and not port]
+        if not self.app.confirm("Restore this backup?", "This replaces the current settings with the ones in the "
+                                "backup." + (f" Not connected, so skipped: {', '.join(missing)}." if missing else ""),
+                                details=lines, ok="Restore"):
+            return
+        say = lambda t: self.app.ui(lambda: self.backup_lbl.configure(text=t, fg=self.pal["DIM"]))
+
+        def work():
+            try:
+                result = backup_mod.restore(data, *ports, self.app.cfg, say)
+            except ValueError as e:
+                result = [str(e)]
+
+            def ui():
+                bad = any(r.startswith(("Didn't", "Nothing", "this isn't")) for r in result)
+                self.backup_lbl.configure(text=result[0], fg=self.pal["WARN"] if bad else self.pal["GREEN"])
+                # show what's now on the boards and this PC
+                self.pers_var.set(self.app.cfg.get("ai_personality", "classic"))
+                for box, key in ((self.custom, "ai_personality_custom"), (self.facts, "ai_facts")):
+                    box.delete("1.0", "end")
+                    box.insert("1.0", self.app.cfg.get(key, ""))
+                self.mem_var.set(bool(self.app.cfg.get("ai_memory_on", True)))
+                self.memory_changed()
+                self.app.ai_tab.personality_changed()
+                self.after(300, self._read_boards)
+                self.after(600, self.app.routines_tab.read_all)
+                (self.app.error if bad else self.app.info)("\n".join(result), "Restore")
+            self.app.ui(ui)
+        self.app.job("Restore", work)
+
+    # --- AI memory ---------------------------------------------------------------------------------------------
+    def memory_changed(self):
+        n = len(self.app.cfg.get("ai_memory", []))
+        on = self.mem_var.get()
+        self.mem_lbl.configure(text=(f"{n} thing{'s' if n != 1 else ''} remembered." if n else "Nothing remembered yet.")
+                               + ("" if on else " (Off: the brain neither uses nor adds notes.)"))
+
+    def save_memory_on(self):
+        self.app.cfg["ai_memory_on"] = self.mem_var.get()
+        core.save_config(self.app.cfg)
+        self.memory_changed()
+        self.app.ai_tab.personality_changed()
+
+    def edit_memories(self):
+        """A small editor for the notes: change or delete lines, or clear the lot."""
+        p = self.pal
+        dlg = tk.Toplevel(self, bg=p["BG"])
+        dlg.title("What the robot remembers")
+        dlg.transient(self.winfo_toplevel())
+        tk.Label(dlg, text="One note per line, oldest first. Edit or delete lines, then Save. The brain sees the "
+                           f"newest {brain.MEMORY_IN_PROMPT} and keeps up to {brain.MEMORY_MAX}.", bg=p["BG"],
+                 fg=p["DIM"], font=("Segoe UI", 9), wraplength=620, justify="left").pack(anchor="w", padx=14,
+                                                                                       pady=(12, 6))
+        txt = tk.Text(dlg, width=84, height=16, bg=p["PANEL_HI"], fg=p["TEXT"], relief="flat",
+                      insertbackground=p["GREEN"], font=("Segoe UI", 9), wrap="word", undo=True)
+        txt.insert("1.0", "\n".join(self.app.cfg.get("ai_memory", [])))
+        txt.pack(fill="both", expand=True, padx=14)
+        row = tk.Frame(dlg, bg=p["BG"])
+        row.pack(fill="x", padx=14, pady=10)
+
+        def save(lines=None):
+            if lines is None:
+                lines = [" ".join(line.split()) for line in txt.get("1.0", "end").splitlines()]
+            self.app.cfg["ai_memory"] = [line[:180] for line in lines if line][-brain.MEMORY_MAX:]
+            core.save_config(self.app.cfg)
+            self.memory_changed()
+            self.app.ai_tab.personality_changed()
+            dlg.destroy()
+
+        def clear():
+            if self.app.confirm("Forget everything?", "The robot forgets everything it remembered from past "
+                                "conversations. This can't be undone.", ok="Forget it all", kind="warning"):
+                save([])
+        self.app.button(row, "Save", save, small=True).pack(side="right")
+        self.app.button(row, "Cancel", dlg.destroy, small=True).pack(side="right", padx=6)
+        self.app.button(row, "Forget everything", clear, small=True).pack(side="left")
+        dlg.grab_set()
 
     def save_personality(self):
         custom = self.custom.get("1.0", "end").strip()[:brain.CUSTOM_MAX]

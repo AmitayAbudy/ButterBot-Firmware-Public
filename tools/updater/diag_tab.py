@@ -126,14 +126,12 @@ class DiagnosticsTab(tk.Frame):
         p = self.pal
         row = tk.Frame(panel, bg=p["PANEL"])
         row.pack(fill="x", padx=12, pady=(4, 0))
-        tk.Label(row, text="Port", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 9)).pack(side="left")
         link.port_var = tk.StringVar()
         link.port_box = ttk.Combobox(row, textvariable=link.port_var, state="readonly", style="Hop.TCombobox",
                                      width=30)
-        link.port_box.pack(side="left", padx=(6, 4))
+        # not shown: the board bar at the top of the window picks the port
         link.btn = self.app.button(row, "Connect", lambda: self.toggle(link), small=True)
-        link.btn.pack(side="left", padx=6)
-        self.app.scan_button(row, p["PANEL"])
+        link.btn.pack(side="left")
         link.state_lbl = tk.Label(panel, text="Not connected", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8),
                                   anchor="w")
         link.state_lbl.pack(fill="x", padx=12, pady=(2, 0))
@@ -635,7 +633,7 @@ class DiagnosticsTab(tk.Frame):
             return
         port = link.port_var.get().split(" ", 1)[0]
         if not port:
-            link.state_lbl.configure(text="Pick the port first.", fg=self.pal["WARN"])
+            link.state_lbl.configure(text="Pick the port at the top first (or hit Scan there).", fg=self.pal["WARN"])
             return
         other = self.links["ctrl" if link.kind == "bot" else "bot"]
         if other.session is not None and other.port == port:

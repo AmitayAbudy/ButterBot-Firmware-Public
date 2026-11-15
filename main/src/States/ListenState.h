@@ -1,6 +1,7 @@
 #ifndef BUTTERBOT_FIRMWARE_LISTENSTATE_H
 #define BUTTERBOT_FIRMWARE_LISTENSTATE_H
 
+#include "Services/UserData.h"
 #include <string>
 #include "State.h"
 #include <memory>
@@ -45,6 +46,8 @@ private:
     void fallBackToOffline(const class Application* app, const char* why);
 
 	static std::vector<AudioFrontend::Phrase> phrases;
+	static std::vector<UserData::Command> commandSnapshot; // fork: the owner's voice commands while listening
+	void startUserRoutine(int routine);
 
     std::shared_ptr<AiSession> ai;
 };

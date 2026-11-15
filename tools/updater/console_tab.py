@@ -57,7 +57,6 @@ class ConsoleTab(tk.Frame):
         self.connect_btn.pack(side="left", padx=8)
         self.state_lbl = tk.Label(row, text="Not connected", bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 9))
         self.state_lbl.pack(side="left", padx=6)
-        app.scan_button(row, p["BG"])
         app.button(row, "Save log…", self.save, small=True).pack(side="right")
         app.button(row, "Clear", self.clear, small=True).pack(side="right", padx=6)
 

@@ -11,6 +11,10 @@ Every button has a tooltip: hover over it to see what it does.
 
 ## Tabs
 
+The bar under the title shows which USB port the **ButterBot** and the **Controller** are on; every tab uses it.
+**⟳ Scan** there finds them (it listens for their status line first and only probes boards that stay silent), or pick
+a port yourself. The big header shows on the Flash tab only; the other tabs get a slim one.
+
 Drag a tab left or right to reorder the tabs; the order is remembered (**About** → *Reset tab order* puts it back).
 **About** (top right) shows the version, the author and the project links.
 
@@ -28,8 +32,8 @@ have to be updated by hand once.
 
 ![Flash tab](../../docs/images/flash.png)
 
-- **Scan dimensions** (and the **⟳ Scan** button next to every port list, in every tab) finds the robot and the controller on USB and tells them apart (it listens for their status
-  line first, and only probes boards that stay silent).
+- **Scan dimensions** (or **⟳ Scan** in the bar at the top) finds the robot and the controller on USB and tells
+  them apart.
 - **Pick a payload per board:**
   - *Latest GitHub release* from this fork (the default - `Exadon/...` with a green **FORK** badge) or the stock
     CircuitMess firmware (**STOCK** badge), plus any repository you add under **Repos…**. Downloads are cached.
@@ -74,13 +78,31 @@ Make the robot yours:
 - **Chat replies** - your own answer to any of the 48 chat voice lines; the controller shows it as a subtitle.
 - **AI personality and facts about you** - classic, extra sarcastic, overly dramatic, wholesome, grumpy, or your own
   description, plus a few facts the AI brings up now and then (birthday, pets…). Kept on the PC.
+- **Remember past conversations** - after each AI conversation the brain keeps a few short dated notes ("has a maths
+  test on Friday") and follows one up now and then. **Memories…** shows them to read, edit or forget. Kept on the PC.
+- **Back up… / Restore…** (top right) - everything you've set up on the robot, the controller and this PC (voice,
+  names, lines, routines, commands, schedules, theme, AI personality and memories) in one `.json` file, and back.
 
-Cards that need a board stay greyed out until that board answers. Everything on the robot and controller is saved
-there, so it survives updates.
+Cards that need a board stay greyed out until that board answers (one notice at the top says which). Everything on the
+robot and controller is saved there, so it survives updates.
+
+### Routines
+
+Your own routines, voice commands and schedules - saved on the robot, so they work without the PC.
+- **My routines** - up to 12, each up to 30 steps: *Say a line*, *Built-in action* (tell the time, a joke or a fact,
+  pass the butter, open a portal), *Drive* (a direction, speed and time), *Wait*, *Dance*, *LED
+  module*. **Save to robot**, then **▶ Run on robot** to try it. Pressing the robot's button stops it.
+- **Voice commands** - "when I say *party time*, run *Party*". The robot listens for the phrase offline like its own
+  commands (the tab shows the sounds it listens for), and the AI brain runs it too. For names and unusual words,
+  **🎤 Teach by voice**: the robot listens three times while you say the phrase and learns how you say it.
+- **Schedule** - days and a time for a routine; the robot has to be switched on.
+- **Quiet hours** - no idle muttering, wandering or looking around in that window (it can cross midnight).
+- **Robot clock** - the robot's time next to the PC's. Dimension Hopper keeps it in sync whenever it finds the robot
+  (untick to stop); **Set to** any date and time for testing schedules, **Use PC time** to go back.
 
 ### Diagnostics
-The robot and the controller side by side, each with its own port and Connect button (both can be connected at once;
-the ports are filled in from the Flash tab after a scan):
+The robot and the controller side by side, each with its own Connect button (both can be connected at once; the
+ports come from the bar at the top):
 
 - **ButterBot:** live sensors, motors, battery, link and motion events; a **joystick** to drive it (drag it, or use
   the arrow keys / WASD; the further you push, the faster it goes - it won't drive forward into an obstacle or off an
@@ -101,6 +123,7 @@ own icons and animations) showing what the robot sends, the controller's whole a
   disconnect, it reconnects by itself and keeps its pairing.
 - **Settings** (activity, front and bottom sensor), like the controller's Settings screen; read from the robot when
   you connect.
+- **Camera** (USB only) - what the robot sees while you drive it, about 2 frames a second.
 - RC mode with the camera still needs the hardware controller (it makes the WiFi hotspot the camera streams to); here
   the stick drives the robot directly.
 
@@ -116,8 +139,8 @@ Four steps, each with a lamp (NOT SET UP / TO DO / WORKING… / READY / PROBLEM)
 
 1. **Robot WiFi** - **Scan** lists the networks the robot can see (2.4 GHz only), pick yours, type the password,
    **Send to robot**, then **Test robot WiFi**. Tick *remember on this PC* to keep the password in Windows Credential
-   Manager. The line underneath shows this PC's address, which is given to the robot so it finds the brain even when
-   the robot and the PC are on different sub-networks (common with mesh WiFi).
+   Manager. This PC's address is given to the robot so it finds the brain even when the robot and the PC are on
+   different sub-networks (common with mesh WiFi); it stays hidden on screen unless you tick *show addresses*.
 2. **Hearing** - loads [Whisper](https://github.com/SYSTRAN/faster-whisper) on this PC (base.en, about 140 MB,
    downloaded once from Hugging Face - **Source…** can point it at a mirror or a folder instead).
 3. **Thinking** - [Ollama](https://ollama.com), free and local. Install it, run `ollama pull llama3.1:8b` (or
@@ -126,6 +149,9 @@ Four steps, each with a lamp (NOT SET UP / TO DO / WORKING… / READY / PROBLEM)
    The brain warms up (it runs Whisper once and has the model read ButterBot's instructions) before showing READY, so
    the first answer is as quick as the rest. After the first successful conversation it starts by itself whenever
    Dimension Hopper opens.
+
+The brain also runs your own voice commands (Routines tab) whenever you say their phrase, and hands "what time is
+it?" to the robot's own clock instead of letting the AI guess.
 
 The **Conversations** table shows what you said, ButterBot's answer, the action, and how long the upload, hearing and
 thinking took. Every conversation is also logged to `%LOCALAPPDATA%\DimensionHopper\brain_log.jsonl`.
@@ -185,12 +211,16 @@ Dev flags: `--selftest <out.txt>` checks the bundled esptool, stubs and AI libra
 |---|---|
 | `hopper_core.py` | Ports, probe, status, GitHub releases, image checks, quick flash, backup, console commands. No UI. |
 | `dimension_hopper.py` | Tk UI: the animated portal, device slots, job runner, log; hosts the tabs. |
-| `guide_tab.py`, `personalize_tab.py`, `diag_tab.py`, `controller_tab.py`, `console_tab.py`, `ai_tab.py` | The tabs. |
+| `guide_tab.py`, `personalize_tab.py`, `routines_tab.py`, `diag_tab.py`, `controller_tab.py`, `console_tab.py`, `ai_tab.py` | The tabs. |
 | `controller_link.py` | The emulated controller's link to the robot: the message format, over USB or Bluetooth (bleak). |
 | `stick_widget.py` | The joystick used by the Controller and Diagnostics tabs. |
 | `screen_render.py` | Draws the Controller tab's screen like the real controller's (its font, windows and texts). |
 | `gen_screen_data.py` | Makes `screen_data.json` (font, window titles, texts) from the controller firmware sources; run by hand when they change. |
-| `brain.py` | The AI brain: Whisper, Ollama, the robot protocol and server, persona and timings. |
+| `brain.py` | The AI brain: Whisper, Ollama, the robot protocol and server, persona, memory and timings. |
+| `backup.py` | Back up / restore everything set up on the robot, the controller and the PC (one JSON file). |
+| `phonemes.py` | Turns a voice-command phrase into the sounds the robot's recogniser listens for (CMU dictionary + spelling rules). |
+| `gen_phonemes.py` | Makes `phonemes.txt.gz` from the [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) (licence in `CMUDICT_LICENSE`); run by hand. |
+| `self_update.py` | Checks the latest release for a newer Dimension Hopper and swaps the exe in place. |
 | `tooltip.py` | Hover help for every button. |
 | `build_exe.ps1` | Reproducible PyInstaller build. |
 | `make_art.py` | Regenerates the art: `portal.ico`/`portal.png` (app icon), `bot.png` and `controller.png` (slot icons). |

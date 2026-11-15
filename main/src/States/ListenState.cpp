@@ -1,3 +1,5 @@
+#include "Routines/UserRoutine.h"
+#include "Services/UserData.h"
 #include "ListenState.h"
 #include "BBStateMachine.h"
 #include "Audio/AudioFrontend.h"
@@ -202,6 +204,7 @@ namespace {
 }
 
 std::vector<AudioFrontend::Phrase> ListenState::phrases;
+std::vector<UserData::Command> ListenState::commandSnapshot;
 
 /*
  * Fork: the AI brain path. While the intro plays, a worker task joins the home WiFi and finds the brain on the
@@ -401,6 +404,15 @@ void ListenState::startOffline(const Application* app){
             }
         }
 
+        // Fork: the owner's own voice commands, after the IR ones (onPhrase counts on this order)
+        {
+            std::lock_guard<std::mutex> g(UserData::lock);
+            commandSnapshot = UserData::commands; // the phrase list points into this copy while listening
+        }
+        for(const UserData::Command& cmd : commandSnapshot){
+            phrases.push_back({ cmd.phrase.c_str(), cmd.phonemes.c_str() });
+        }
+
         audioFrontend->setSpeechPhrases(phrases);
     }
 
@@ -584,6 +596,11 @@ void ListenState::tick(float){
                 return;
             }
         }
+        // Fork: one of the owner's own voice commands (the brain gets their phrases as actions)
+        if(const int routine = UserData::routineForPhrase(r.action); routine >= 0 && ServiceLocator::ScenarioRoutineServiceInstance){
+            startUserRoutine(routine);
+            return;
+        }
         printf("[BBAI] event=unknown_action\n");
     }
     sm->transitionTo<IdleState>();
@@ -626,6 +643,17 @@ void ListenState::onPhrase(bool recognized, int index, const std::string& transc
         return;
     }
 
+    const int irCount = ServiceLocator::IRStorageInstance ? static_cast<int>(ServiceLocator::IRStorageInstance->getCount()) : 0;
+    if(index >= static_cast<int>(activations.size()) + irCount){
+        const int cmd = index - static_cast<int>(activations.size()) - irCount;
+        if(cmd < static_cast<int>(commandSnapshot.size())){
+            startUserRoutine(commandSnapshot[cmd].routine);
+        }else{
+            sm->transitionTo<IdleState>();
+        }
+        return;
+    }
+
     if(index >= static_cast<int>(activations.size())){
         const int irIndex = index - static_cast<int>(activations.size());
         if(ServiceLocator::IRStorageInstance){
@@ -645,6 +673,13 @@ void ListenState::onPhrase(bool recognized, int index, const std::string& transc
     }
 
     ServiceLocator::ScenarioRoutineServiceInstance->setRoutineFactory(factory);
+    sm->transitionTo<ScenarioState>();
+}
+
+void ListenState::startUserRoutine(int routine){
+    printf("[BBCMDS] event=heard routine=%d\n", routine);
+    UserRoutine::pending = routine;
+    ServiceLocator::ScenarioRoutineServiceInstance->setRoutineFactory(&makeRoutine<UserRoutine>);
     sm->transitionTo<ScenarioState>();
 }
 

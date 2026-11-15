@@ -46,6 +46,16 @@ CACHE_DIR = APP_DIR / "cache"
 BACKUP_DIR = APP_DIR / "backups"
 CONFIG_PATH = APP_DIR / "config.json"
 
+
+def short_path(path) -> str:
+    """A path for the screen and logs without the Windows user name in it (people post screenshots)."""
+    text = str(path)
+    for var in ("LOCALAPPDATA", "APPDATA", "USERPROFILE"):
+        base = os.environ.get(var)
+        if base and text.lower().startswith(base.lower()):
+            return f"%{var}%" + text[len(base):]
+    return text
+
 # Built-in choices for the "Latest GitHub release" dropdown: the stock firmware and this fork.
 # More can be added at runtime (Repos… dialog); those live in config["custom_repos"].
 # The fork first: this app ships with the fork's releases, so that's what a new user means to install.
@@ -896,7 +906,7 @@ def console_command(port: str, command: str, reply_tag: str, timeout_s: float = 
                 for line in buf.decode("utf-8", "replace").splitlines():
                     if m := pat.search(line):
                         return dict(kv.split("=", 1) for kv in m.group(1).split())
-                buf = buf[-2048:]
+                buf = buf[-8192:]  # a routine comes back as one line of up to ~3000 characters
         except serial.SerialException:
             return dict(PORT_LOST)
         finally:
@@ -905,6 +915,46 @@ def console_command(port: str, command: str, reply_tag: str, timeout_s: float = 
             except serial.SerialException:
                 pass
     return None
+
+
+def console_watch(port: str, command: str, until: Callable[[str], bool], timeout_s: float) -> Optional[list[str]]:
+    """Sends a console command, then collects the board's lines until until(line) is true or the time is up.
+    None when the port couldn't be opened or went away. Never raises."""
+    import serial
+
+    if not port_exists(port):
+        return None
+    with _esptool_lock:
+        s = serial.Serial()
+        s.port, s.baudrate, s.timeout = port, 115200, 0.2
+        s.dtr = False
+        s.rts = False
+        try:
+            s.open()
+        except serial.SerialException:
+            return None
+        lines: list[str] = []
+        try:
+            s.write(command.encode() + b"\n")
+            buf, end = b"", time.time() + timeout_s
+            while time.time() < end:
+                buf += s.read(512)
+                *done, buf = buf.split(b"\n")
+                for raw in done:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if line:
+                        lines.append(line)
+                        if until(line):
+                            return lines
+                buf = buf[-8192:]
+        except serial.SerialException:
+            return None
+        finally:
+            try:
+                s.close()
+            except serial.SerialException:
+                pass
+    return lines
 
 
 # ---------------------------------------------------------------------------------------------

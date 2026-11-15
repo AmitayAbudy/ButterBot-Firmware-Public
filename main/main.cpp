@@ -6,6 +6,8 @@
 #include <esp_timer.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <driver/uart.h>
+#include <driver/uart_vfs.h>
 #include <atomic>
 #include <string>
 #include <esp_app_desc.h>
@@ -50,6 +52,8 @@
 #include "Audio/VoicePreset.h"
 #include "Services/HomeWiFi.h"
 #include "Services/Personal.h"
+#include "Services/UserData.h"
+#include "Services/Time.h"
 #include <Scenarios.h>
 #include "Services/BrainLink.h"
 #include <lwip/inet.h>
@@ -135,6 +139,7 @@ protected:
 		ESP_ERROR_CHECK(ret);
 		Voice::load(); // fork: the chosen voice preset, before anything speaks
 		Personal::load(); // fork: owner / robot names and the owner's ramble lines
+		UserData::load(); // fork: the owner's routines, voice commands, schedules and quiet hours
 
 		if(!SPIFFS::init()){
 			CMF_LOG(Butterbot, LogLevel::Error, "SPIFFS init failed, aborting startup");
@@ -442,6 +447,11 @@ private:
 	}
 
 	void diagTask(){
+		// Fork: read the console through the UART driver (an interrupt fills a RAM buffer). Read straight from the
+		// 128-byte hardware FIFO, a command longer than that (a routine's text, a voice command) lost its tail.
+		if(!uart_is_driver_installed(UART_NUM_0) && uart_driver_install(UART_NUM_0, 1024, 0, 0, nullptr, 0) == ESP_OK){
+			uart_vfs_dev_use_driver(UART_NUM_0);
+		}
 		// Console stdin: never block the task waiting for input
 		const int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
 		fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
@@ -450,8 +460,9 @@ private:
 		uint64_t nextStatus = millis() + StatusIntervalMs;
 		uint64_t nextDiag = 0;
 		for(;;){
-			char buf[32];
-			const int n = read(STDIN_FILENO, buf, sizeof(buf));
+			char buf[128];
+			int n;
+			while((n = read(STDIN_FILENO, buf, sizeof(buf))) > 0)
 			for(int i = 0; i < n; ++i){
 				if(buf[i] == '\n' || buf[i] == '\r'){
 					if(line == "diag on") diagUntil = millis() + DiagHoldMs;
@@ -483,6 +494,15 @@ private:
 						printStartLine();
 					});
 					else if(line == "chat") printChat();
+					else if(line == "clock") printClock();
+					else if(line.rfind("clock set ", 0) == 0) runFlashJob([this, t = line.substr(10)]{ setClock(t); });
+					else if(line == "rout") printRoutines();
+					else if(line.rfind("rout ", 0) == 0) routineCommand(line.substr(5));
+					else if(line == "cmds") printCommands();
+					else if(line.rfind("cmds ", 0) == 0) runFlashJob([args = line.substr(5)]{ commandsCommand(args); });
+					else if(line == "sched") printSchedules();
+					else if(line.rfind("sched ", 0) == 0 || line.rfind("quiet ", 0) == 0)
+						runFlashJob([args = line]{ schedulesCommand(args); });
 					else if(line.rfind("chat set ", 0) == 0) runFlashJob([args = line.substr(9)]{ setChat(args); });
 					else if(line.rfind("voice ", 0) == 0) runFlashJob([name = line.substr(6)]{ setVoice(name.c_str()); });
 					else if(line.rfind("say ", 0) == 0) say(line.substr(4));
@@ -807,6 +827,178 @@ private:
 		}
 		Personal::setChat((size_t) index, hex == "-" ? std::string() : fromHex(hex.c_str(), hex.size()));
 		printChat();
+	}
+
+	/*
+	 * Fork: the robot's clock (Routines tab). The RTC keeps local wall-clock time; it travels as seconds since 1970
+	 * read as if that wall clock were UTC (what Dimension Hopper sends from the PC's local time).
+	 * "clock" / "clock set <seconds>" -> [BBCLOCK] t=<seconds> set=<0|1>
+	 */
+	void printClock(){
+		Time* time = getService<Time>();
+		if(time == nullptr){
+			printf("[BBCLOCK] result=error why=no_clock\n");
+			return;
+		}
+		tm now = time->getTime();
+		const time_t t = mktime(&now); // TZ is unset on the robot: mktime == timegm
+		printf("[BBCLOCK] t=%lld set=%d\n", (long long) t, time->isConfigured() ? 1 : 0);
+	}
+
+	void setClock(const std::string& arg){
+		Time* time = getService<Time>();
+		const long long t = atoll(arg.c_str());
+		if(time == nullptr || t < 1704067200LL || t > 4102444800LL){ // 2024 .. 2100
+			printf("[BBCLOCK] result=error why=bad_time\n");
+			return;
+		}
+		time->setTime((time_t) t);
+		printClock();
+	}
+
+	/*
+	 * Fork: the owner's routines (Routines tab). Texts can be longer than a console line, so a save comes in parts:
+	 * "rout begin <i>", "rout put <hex>" (repeated), "rout save" - an empty text deletes it. Replies are [BBROUT]:
+	 *   "rout"            -> max=<n> d=<i>:<hex name>,...  ("-" when there are none)
+	 *   "rout get <i>"    -> i=<i> d=<hex text|->
+	 *   "rout run <i>"    -> result=queued i=<i> (it starts when the robot is idle) | result=busy state=<s>
+	 *   "rout begin/put/save" -> result=begin | result=part n=<bytes> | result=saved i= steps= | result=error why=
+	 * While a routine runs: event=start i=, event=end i= how=done|interrupted|charging|not_upright|stopped|missing.
+	 */
+	static inline std::string routStage;
+	static inline int routStageIndex = -1;
+
+	static void printRoutines(){
+		std::string all;
+		for(size_t i = 0; i < UserData::MaxRoutines; ++i){
+			const std::string name = UserData::routineName(i);
+			if(name.empty()) continue;
+			if(!all.empty()) all += ',';
+			all += std::to_string(i) + ":" + toHex(name);
+		}
+		printf("[BBROUT] max=%u d=%s\n", (unsigned) UserData::MaxRoutines, all.empty() ? "-" : all.c_str());
+	}
+
+	void routineCommand(const std::string& args){
+		const int i = atoi(args.c_str() + (args.find(' ') == std::string::npos ? args.size() : args.find(' ') + 1));
+		if(args.rfind("get ", 0) == 0){
+			if(i < 0 || i >= (int) UserData::MaxRoutines){
+				printf("[BBROUT] result=error why=bad_index\n");
+				return;
+			}
+			printf("[BBROUT] i=%d d=%s\n", i, toHex(UserData::routineText((size_t) i)).c_str());
+			fflush(stdout);
+			fsync(fileno(stdout));
+		}else if(args.rfind("run ", 0) == 0){
+			const BBStateMachine* sm = getService<BBStateMachine>();
+			const State* state = sm != nullptr ? sm->getActiveState() : nullptr;
+			if(i < 0 || i >= (int) UserData::MaxRoutines || UserData::routineName((size_t) i).empty()){
+				printf("[BBROUT] result=error why=no_routine\n");
+			}else if(state == nullptr || strcmp(state->name(), "idle") != 0){
+				printf("[BBROUT] result=busy state=%s\n", state != nullptr ? state->name() : "none");
+			}else{
+				UserData::runRequest = i;
+				printf("[BBROUT] result=queued i=%d\n", i);
+			}
+		}else if(args.rfind("begin ", 0) == 0){
+			routStage.clear();
+			routStageIndex = i >= 0 && i < (int) UserData::MaxRoutines ? i : -1;
+			if(routStageIndex < 0) printf("[BBROUT] result=error why=bad_index\n");
+			else printf("[BBROUT] result=begin\n");
+		}else if(args.rfind("put ", 0) == 0){
+			const std::string part = fromHex(args.c_str() + 4, args.size() - 4);
+			if(routStageIndex < 0 || part.empty() || routStage.size() + part.size() > UserData::MaxRoutineText){
+				printf("[BBROUT] result=error why=part\n");
+				return;
+			}
+			routStage += part;
+			printf("[BBROUT] result=part n=%u\n", (unsigned) routStage.size());
+		}else if(args == "save"){
+			const int index = routStageIndex;
+			std::string text = std::move(routStage);
+			routStage.clear();
+			routStageIndex = -1;
+			const char* why = "";
+			const int steps = text.empty() ? 0 : UserData::validate(text, &why);
+			if(index < 0 || steps < 0){
+				printf("[BBROUT] result=error why=%s\n", index < 0 ? "no_begin" : why);
+				return;
+			}
+			runFlashJob([index, steps, text = std::move(text)]{
+				UserData::setRoutine((size_t) index, text);
+				printf("[BBROUT] result=saved i=%d steps=%d\n", index, steps);
+			});
+		}else{
+			printf("[BBROUT] result=error why=usage\n");
+		}
+	}
+
+	/*
+	 * Fork: the owner's voice commands. "cmds" -> [BBCMDS] max=<n> d=<routine>:<hex phrase>:<hex phonemes>,... ("-")
+	 * "cmds set <i> <routine> <hex phrase> <hex phonemes>" (i = the count adds one), "cmds del <i>" -> the list again.
+	 */
+	static void printCommands(){
+		std::string all;
+		{
+			std::lock_guard<std::mutex> g(UserData::lock);
+			for(const auto& c : UserData::commands){
+				if(!all.empty()) all += ',';
+				all += std::to_string(c.routine) + ":" + toHex(c.phrase) + ":" + toHex(c.phonemes);
+			}
+		}
+		printf("[BBCMDS] max=%u d=%s\n", (unsigned) UserData::MaxCommands, all.empty() ? "-" : all.c_str());
+	}
+
+	static void commandsCommand(const std::string& args){
+		bool ok = false;
+		int idx = -1, routine = -1;
+		char ph[100] = {}, pn[140] = {};
+		if(sscanf(args.c_str(), "del %d", &idx) == 1 && idx >= 0){
+			ok = UserData::deleteCommand((size_t) idx);
+		}else if(sscanf(args.c_str(), "set %d %d %99s %139s", &idx, &routine, ph, pn) == 4 && idx >= 0 && routine >= 0){
+			ok = UserData::setCommand((size_t) idx, (uint8_t) routine, fromHex(ph, strlen(ph)), fromHex(pn, strlen(pn)));
+		}
+		if(!ok) printf("[BBCMDS] result=error\n");
+		printCommands();
+	}
+
+	/*
+	 * Fork: schedules and quiet hours. "sched" -> [BBSCHED] max=<n> d=<days>:<minute>:<routine>:<on>,... ("-")
+	 * quiet=<on>:<start minute>:<end minute>. "sched set <i> <days> <minute> <routine> <on>", "sched del <i>",
+	 * "quiet <on> <start minute> <end minute>" -> the same line again. days: bit 0 = Sunday .. bit 6 = Saturday.
+	 */
+	static void printSchedules(){
+		std::string all;
+		bool qOn;
+		unsigned qs, qe;
+		{
+			std::lock_guard<std::mutex> g(UserData::lock);
+			for(const auto& sc : UserData::schedules){
+				if(!sc.used) continue;
+				if(!all.empty()) all += ',';
+				all += std::to_string(sc.days) + ":" + std::to_string(sc.minute) + ":" + std::to_string(sc.routine) + ":" + (sc.on ? "1" : "0");
+			}
+			qOn = UserData::quietOn;
+			qs = UserData::quietStart;
+			qe = UserData::quietEnd;
+		}
+		printf("[BBSCHED] max=%u d=%s quiet=%d:%u:%u\n", (unsigned) UserData::MaxSchedules, all.empty() ? "-" : all.c_str(),
+		       qOn ? 1 : 0, qs, qe);
+	}
+
+	static void schedulesCommand(const std::string& args){
+		unsigned i, days, minute, routine, on, start, end;
+		bool ok = false;
+		if(sscanf(args.c_str(), "sched set %u %u %u %u %u", &i, &days, &minute, &routine, &on) == 5){
+			ok = UserData::setSchedule(i, (uint8_t) days, (uint16_t) minute, (uint8_t) routine, on != 0);
+		}else if(sscanf(args.c_str(), "sched del %u", &i) == 1){
+			ok = UserData::deleteSchedule(i);
+		}else if(sscanf(args.c_str(), "quiet %u %u %u", &on, &start, &end) == 3 && start < 24 * 60 && end < 24 * 60){
+			UserData::setQuiet(on != 0, (uint16_t) start, (uint16_t) end);
+			ok = true;
+		}
+		if(!ok) printf("[BBSCHED] result=error\n");
+		printSchedules();
 	}
 
 	static void setVoice(const char* which){

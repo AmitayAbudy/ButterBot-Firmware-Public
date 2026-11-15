@@ -122,7 +122,7 @@
     "what is the current time"
    ],
    "reply": "",
-   "note": ""
+   "note": "reads the robot's clock - set it in the Routines tab"
   },
   {
    "category": "Fun",
@@ -793,7 +793,7 @@
     "tell me my notifications"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "Phone",
@@ -808,7 +808,7 @@
     "what is playing right now"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "Phone",
@@ -820,7 +820,7 @@
     "next track"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "Phone",
@@ -831,7 +831,7 @@
     "previous track"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "Phone",
@@ -843,7 +843,7 @@
     "resume music"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "Phone",
@@ -855,7 +855,7 @@
     "pause playback"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs a phone connected to the robot"
   },
   {
    "category": "IR Remote",
@@ -867,7 +867,7 @@
     "add new infrared action"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs the IR module"
   },
   {
    "category": "IR Remote",
@@ -877,7 +877,7 @@
     "what infrared commands do you know"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs the IR module"
   },
   {
    "category": "IR Remote",
@@ -888,7 +888,7 @@
     "delete infrared"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs the IR module"
   },
   {
    "category": "IR Remote",
@@ -899,7 +899,7 @@
     "clear all infrared"
    ],
    "reply": "",
-   "note": ""
+   "note": "needs the IR module"
   },
   {
    "category": "LED Module",
