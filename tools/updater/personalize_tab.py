@@ -2,7 +2,7 @@
 Dimension Hopper - Personalize tab: make the robot yours.
   * Voice           - eight presets, saved on the robot ("voice <name>")
   * Names           - yours (it greets you by name) and the robot's; saved on the robot ("names") and used by the AI
-  * Controller theme - the controller's colours ("theme <n>" on the controller; it restarts to apply them)
+  * Controller theme - the controller's colours ("theme <n>" on the controller; switches live)
   * Your ramble lines - mixed into the robot's idle rambles ("ramble add / clear")
   * AI personality  - how the AI version talks (kept on this PC, used by the brain)
 
@@ -310,8 +310,7 @@ class PersonalizeTab(tk.Frame):
     def _build_theme(self):
         p = self.pal
         card = self._card(self.left, "CONTROLLER THEME", "The controller's colours. Plug the controller in by USB; it "
-                                                         "restarts to switch (its artwork loads at start-up) and "
-                                                         "reconnects to the robot by itself.")
+                                                         "switches straight away (back to its home screen).")
         row = tk.Frame(card, bg=p["PANEL"])
         row.pack(fill="x", padx=12, pady=(0, 4))
         self.theme_btns = []
@@ -325,7 +324,7 @@ class PersonalizeTab(tk.Frame):
             cv.create_text(46, 28, text="BUTTER", fill=prim, font=("Consolas", 9, "bold"))
             cv.create_line(14, 37, 78, 37, fill=sec, width=2)
             cv.bind("<Button-1>", lambda e, n=i: self.set_theme(n))
-            tooltip.Tooltip(cv, f"Switch the controller to the {name} theme (it restarts).")
+            tooltip.Tooltip(cv, f"Switch the controller to the {name} theme.")
             self.theme_btns.append(cv)
         bottom = tk.Frame(card, bg=p["PANEL"])
         bottom.pack(fill="x", padx=12, pady=(2, 10))
@@ -366,7 +365,7 @@ class PersonalizeTab(tk.Frame):
                     return
                 self._mark_theme(n)
                 self.app.controller_tab.set_theme(n)
-                self.theme_lbl.configure(text=f"{name} it is. The controller is restarting to switch.",
+                self.theme_lbl.configure(text=f"{name} it is.",
                                          fg=self.pal["GREEN"])
             self.app.ui(ui)
         threading.Thread(target=work, daemon=True).start()

@@ -54,7 +54,7 @@ Every voice command and the controller's buttons, with pictures.
 Make the robot yours:
 - **Voice** - eight presets; click one to switch and hear a sample. Classic is the stock voice.
 - **Names** - yours (it greets you by name when it recognises your face) and the robot's; both are used by the AI too.
-- **Controller theme** - Main, Rose, Red or Blue; the controller (plugged in by USB) restarts to switch.
+- **Controller theme** - Main, Rose, Red or Blue; the controller (plugged in by USB) switches straight away.
 - **Your ramble lines** - up to 30 of your own lines, mixed into what the robot mutters when idle.
 - **AI personality** - classic, extra sarcastic, overly dramatic, wholesome, grumpy, or your own description.
 
