@@ -21,6 +21,7 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 
 import hopper_core as core
+import self_update
 from guide_tab import GuideTab
 from diag_tab import DiagnosticsTab
 from console_tab import ConsoleTab
@@ -32,7 +33,7 @@ import tooltip
 from hopper_core import Kind
 
 APP_TITLE = "Dimension Hopper"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ROBOT_REPO = "Exadon/ButterBot-Firmware-Public"
 CTRL_REPO = "Exadon/ButterBotCtrl-Firmware-Public"
 
@@ -529,6 +530,18 @@ class App:
         self.headline.pack(anchor="w", pady=(6, 0))
         self.button(top, "About", self.show_about, small=True).pack(side="right", anchor="n", pady=(6, 0))
 
+        # "A new version is available" bar, shown under the header when the latest release has a newer app
+        self.update_bar = tk.Frame(root, bg=PANEL_HI, highlightbackground=EDGE, highlightthickness=1)
+        self.update_lbl = tk.Label(self.update_bar, text="", bg=PANEL_HI, fg=LIME, font=("Segoe UI Semibold", 10),
+                                   anchor="w")
+        self.update_lbl.pack(side="left", padx=10, pady=6, fill="x", expand=True)
+        self.update_btns = [self.button(self.update_bar, t, c, small=True) for t, c in
+                            (("Later", self.hide_update_bar), ("What's new", self._open_update_page),
+                             ("Update now", lambda: self.start_self_update(self.pending_update)))]
+        for b in self.update_btns:
+            b.pack(side="right", padx=(0, 8), pady=6)
+        self.pending_update: self_update.Update | None = None
+
         # tabs: Flash (the updater) and Guide (controls + voice commands)
         nb = self.nb = ttk.Notebook(root, style="Hop.TNotebook")
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 10))
@@ -604,6 +617,10 @@ class App:
         root.after(300, lambda: self.run_scan(probe_silent=False, on_done=lambda found: self.ai_tab.startup_scan_done()))
         root.protocol("WM_DELETE_WINDOW", self._close)
         self.parked: set[str] = set()
+        if self_update.cleanup_after_update():
+            self.log(f"Updated to {APP_TITLE} {VERSION}. Same lab, new tricks.", "hi")
+            self.headline.configure(text=f"Updated to {VERSION}. Same lab, new tricks.")
+        root.after(1500, lambda: self.check_for_update(manual=False))
 
     # --- widgets ----------------------------------------------------------------------------
     def _style(self):
@@ -766,12 +783,125 @@ class App:
         details = ["Robot firmware + this app:", "  github.com/" + ROBOT_REPO,
                    "Controller firmware:", "  github.com/" + CTRL_REPO]
         choice = HopDialog(self.root, self.pal, self.button, "info", "Dimension Hopper", message, details,
-                           buttons=("Close", "Open on GitHub", "Reset tab order"), default=0, cancel=0).run()
+                           buttons=("Close", "Check for updates", "Open on GitHub", "Reset tab order"), default=0,
+                           cancel=0).run()
         if choice == 1:
+            self.check_for_update(manual=True)
+        elif choice == 2:
             import webbrowser
             webbrowser.open("https://github.com/" + ROBOT_REPO)
-        elif choice == 2:
+        elif choice == 3:
             self.reset_tab_order()
+
+    # --- updating Dimension Hopper itself (see self_update.py) -------------------------------------------
+    @staticmethod
+    def _my_version() -> str:
+        return os.environ.get("DH_PRETEND_VERSION") or VERSION  # the override is a test aid for the updater
+
+    def check_for_update(self, manual: bool):
+        """Looks for a newer Dimension Hopper in the latest robot release. Automatic checks (at start-up) are quiet
+        and reuse the last answer for most of a day; a manual one (About) always asks GitHub and reports back."""
+        def work():
+            try:
+                u = self_update.cached_check(self.cfg, ROBOT_REPO, force=manual)
+                core.save_config(self.cfg)
+            except self_update.UpdateError as e:
+                if manual:
+                    self.ui(lambda: self.error(f"Couldn't check for updates: {e}.", "Update check"))
+                else:
+                    self.tlog(f"Update check skipped: {e}", "warn")
+                return
+            mine = self._my_version()
+            if u and self_update.newer(u.version, mine):
+                self.ui(lambda: self._show_update_bar(u))
+                if "--update-now" in sys.argv:  # dev aid: install without asking (tests the swap end to end)
+                    self.ui(lambda: self.start_self_update(u, ask=False))
+            elif manual:
+                self.ui(lambda: self.info(f"You have the latest version ({mine}).", "Up to date"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update_bar(self, u: self_update.Update):
+        self.pending_update = u
+        self.update_lbl.configure(text=f"Dimension Hopper {u.version} is available (you have {self._my_version()}).",
+                                  fg=LIME)
+        for b in self.update_btns:
+            b.configure(state="normal")
+        if not self.update_bar.winfo_ismapped():
+            self.update_bar.pack(fill="x", padx=18, pady=(0, 6), before=self.nb)
+            self.log(f"Dimension Hopper {u.version} is available - Update now is at the top.", "hi")
+
+    def hide_update_bar(self):
+        self.update_bar.pack_forget()
+
+    def _open_update_page(self):
+        import webbrowser
+        u = self.pending_update
+        webbrowser.open(u.page if u and u.page else f"https://github.com/{ROBOT_REPO}/releases/latest")
+
+    def start_self_update(self, u: self_update.Update | None, ask: bool = True):
+        if u is None:
+            return
+        if not self_update.can_self_update():
+            self.info("This copy runs from the Python sources, so it can't replace itself - pull the new version "
+                      "with git, or download DimensionHopper.exe from the release page.", "Update")
+            self._open_update_page()
+            return
+        if self.busy:
+            if not ask:  # --update-now: wait for the start-up scan instead
+                self.root.after(1000, lambda: self.start_self_update(u, ask=False))
+                return
+            self.info("Dimension Hopper is busy (flashing, scanning or reading a board) - update when it's done.",
+                      "Busy")
+            return
+        if ask and not self.confirm(
+                f"Update to {u.version}?",
+                "Dimension Hopper downloads the new version, closes and opens again (a few seconds). Anything "
+                "running on the other tabs stops - an AI chat, the controller link, a diagnostics session. "
+                "Your settings and keys stay as they are.", ok="Update & restart", cancel="Not now"):
+            return
+        self.set_busy(True)
+        for b in self.update_btns:
+            b.configure(state="disabled")
+        self.log(f"Downloading Dimension Hopper {u.version}...", "hi")
+
+        def progress(p: int):
+            self.ui(lambda: self.update_lbl.configure(text=f"Downloading Dimension Hopper {u.version}... {p}%"))
+
+        def work():
+            try:
+                new = self_update.download(u, progress)
+            except self_update.UpdateError as e:
+                why = str(e)
+                self.ui(lambda: self._update_failed(why))
+                return
+            self.ui(lambda: self._install_update(new, u))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _install_update(self, new: Path, u: self_update.Update):
+        self.update_lbl.configure(text=f"Restarting into {u.version}...")
+        self.root.update_idletasks()
+        try:
+            self_update.install_and_restart(new)
+        except self_update.UpdateError as e:
+            self._update_failed(str(e))
+            return
+        self.log(f"Installed {u.version}, restarting.", "hi")
+        for tab in (self.diag_tab, self.console_tab, self.controller_tab, self.ai_tab):
+            try:
+                tab.shutdown()
+            except Exception:  # noqa: BLE001 - quitting anyway
+                pass
+        self.root.destroy()
+
+    def _update_failed(self, why: str):
+        self.set_busy(False)
+        if self.pending_update:
+            self._show_update_bar(self.pending_update)
+        self.log(f"Update failed: {why}", "bad")
+        if self.confirm("Update failed", f"{why[:1].upper()}{why[1:]}.\n\nThis version keeps working. You can also "
+                        "download the new one from the release page.", ok="Open release page", cancel="Close",
+                        kind="error"):
+            self._open_update_page()
 
     def refresh_ports(self, auto_assign=False) -> list[core.PortInfo]:
         ports = core.list_ports()
@@ -1358,6 +1488,8 @@ def _selftest(out: str):
         lines.append(f"ai: MISSING {e!r}")
     import controller_link
     lines.append(f"bluetooth: {controller_link.bluetooth_available()}")
+    lines.append(f"self-update: can={self_update.can_self_update()} exe={self_update.exe_path().name} "
+                 f"writable={self_update.writable(self_update.exe_path().parent)}")
     import screen_render
     lines.append(f"controller screen: {len(screen_render.GLYPHS)} glyphs, {len(screen_render.DATA['phrases'])} text lists")
     try:  # Update both runs flashes in worker processes (this exe again, with --flash-worker)

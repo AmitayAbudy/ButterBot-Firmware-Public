@@ -37,7 +37,14 @@ TIPS = {
     "Use the stock line": "Go back to the robot's own start-up line.",
     "Save reply": "Save your reply to this chat line on the robot.",
     "Use the stock reply": "Go back to the robot's own reply to this chat line.",
-    "About": "Who made Dimension Hopper, its version and where to find the project. Also: reset the tab order.",
+    "About": "Who made Dimension Hopper, its version and where to find the project. Also: check for updates and "
+             "reset the tab order.",
+    "Update now": "Download the new Dimension Hopper, check it, swap it in and reopen. Settings and keys are kept.",
+    "What's new": "Open the release page with what changed in the new version.",
+    "Later": "Hide this until Dimension Hopper is opened again.",
+    "Check for updates": "Ask GitHub whether there's a newer Dimension Hopper.",
+    "Update & restart": "Download the new version, swap it in and reopen Dimension Hopper.",
+    "Open release page": "Open the latest release on GitHub, where DimensionHopper.exe can be downloaded by hand.",
     "⟳ Scan": "Find which board is on which USB port (a few seconds). What it finds fills in the port lists in "
               "every tab.",
     "Robot status": "Ask the robot for its battery, memory, WiFi, AI mode and firmware, like the controller's "

@@ -110,10 +110,24 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File tools/updater/build_exe.ps1
 
+      # dimensionhopper.json tells installed copies which version this exe is and its SHA-256, so they can offer
+      # "Update now" and check the download (tools/updater/self_update.py)
+      - name: Write the version file
+        shell: pwsh
+        run: |
+          $src = Get-Content tools/updater/dimension_hopper.py -Raw
+          if ($src -notmatch '(?m)^VERSION = "([^"]+)"') { throw "VERSION not found in dimension_hopper.py" }
+          $sha = (Get-FileHash tools/updater/dist/DimensionHopper.exe -Algorithm SHA256).Hash.ToLower()
+          @{ version = $Matches[1]; sha256 = $sha } | ConvertTo-Json -Compress |
+            Set-Content tools/updater/dist/dimensionhopper.json -Encoding ascii
+          Get-Content tools/updater/dist/dimensionhopper.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: DimensionHopper.exe
-          path: tools/updater/dist/DimensionHopper.exe
+          path: |
+            tools/updater/dist/DimensionHopper.exe
+            tools/updater/dist/dimensionhopper.json
           if-no-files-found: error
 
       - name: Attach to the release
@@ -121,4 +135,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          files: tools/updater/dist/DimensionHopper.exe
+          overwrite_files: true
+          files: |
+            tools/updater/dist/DimensionHopper.exe
+            tools/updater/dist/dimensionhopper.json

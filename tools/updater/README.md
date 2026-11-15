@@ -14,6 +14,16 @@ Every button has a tooltip: hover over it to see what it does.
 Drag a tab left or right to reorder the tabs; the order is remembered (**About** → *Reset tab order* puts it back).
 **About** (top right) shows the version, the author and the project links.
 
+### Updating Dimension Hopper itself
+
+From version 1.4.0 the app keeps itself up to date. At start-up (at most about once a day) it checks this fork's
+latest release; when that has a newer Dimension Hopper, a bar at the top offers **Update now**, **What's new** and
+**Later**. *Update now* downloads the new `DimensionHopper.exe` next to the running one, checks its SHA-256 against
+the release's `dimensionhopper.json` (written by CI), swaps the files and reopens - settings and keys stay where they
+are. **About** → *Check for updates* asks straight away. If anything fails (no internet, a folder it can't write to,
+a bad download) the current version keeps working and it offers the release page instead. Copies older than 1.4.0
+have to be updated by hand once.
+
 ### Flash
 
 ![Flash tab](../../docs/images/flash.png)
