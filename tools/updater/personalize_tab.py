@@ -53,20 +53,35 @@ class PersonalizeTab(tk.Frame):
         top = tk.Frame(self, bg=p["BG"])
         top.pack(fill="x", padx=18, pady=(10, 6))
         tk.Label(top, text="PERSONALIZE", bg=p["BG"], fg=p["GREEN"], font=("Segoe UI Black", 13)).pack(side="left")
-        tk.Label(top, text="settings saved on the robot itself - they stay after updates", bg=p["BG"], fg=p["DIM"],
-                 font=("Segoe UI", 9)).pack(side="left", padx=10, pady=(4, 0))
+        tk.Label(top, text="settings saved on the robot and the controller - they stay after updates", bg=p["BG"],
+                 fg=p["DIM"], font=("Segoe UI", 9)).pack(side="left", padx=10, pady=(4, 0))
 
-        row = tk.Frame(self, bg=p["BG"])
-        row.pack(fill="x", padx=18, pady=(0, 8))
-        tk.Label(row, text="Robot port", bg=p["BG"], fg=p["DIM"]).pack(side="left")
+        # Which board is where. Cards that need a board stay greyed out until that board answers.
+        self.robot_ok = False
+        self.ctrl_ok = False
+        ports = tk.Frame(self, bg=p["BG"])
+        ports.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(ports, text="Robot", bg=p["BG"], fg=p["DIM"], width=9, anchor="w").grid(row=0, column=0, sticky="w")
         self.port_var = tk.StringVar()
-        self.port_box = ttk.Combobox(row, textvariable=self.port_var, state="readonly", style="Hop.TCombobox", width=40)
-        self.port_box.pack(side="left", padx=(8, 6))
+        self.port_box = ttk.Combobox(ports, textvariable=self.port_var, state="readonly", style="Hop.TCombobox",
+                                     width=40)
+        self.port_box.grid(row=0, column=1, padx=(0, 6), pady=2)
         self.port_box.bind("<<ComboboxSelected>>", lambda e: self.read_voice())
-        app.button(row, "⟳ Scan", self.find_robot, small=True).pack(side="left")
-        self.port_lbl = tk.Label(row, text="Plug the robot in by USB and switch it on.", bg=p["BG"], fg=p["DIM"],
+        self.port_lbl = tk.Label(ports, text="Plug the robot in by USB and switch it on.", bg=p["BG"], fg=p["DIM"],
                                  font=("Segoe UI", 8))
-        self.port_lbl.pack(side="left", padx=8)
+        self.port_lbl.grid(row=0, column=3, sticky="w", padx=8)
+        tk.Label(ports, text="Controller", bg=p["BG"], fg=p["DIM"], width=9, anchor="w").grid(row=1, column=0,
+                                                                                              sticky="w")
+        self.ctrl_var = tk.StringVar()
+        self.ctrl_box = ttk.Combobox(ports, textvariable=self.ctrl_var, state="readonly", style="Hop.TCombobox",
+                                     width=40)
+        self.ctrl_box.grid(row=1, column=1, padx=(0, 6), pady=2)
+        self.ctrl_box.bind("<<ComboboxSelected>>", lambda e: self.read_ctrl())
+        self.ctrl_lbl = tk.Label(ports, text="Plug the controller in by USB and switch it on (for its theme).",
+                                 bg=p["BG"], fg=p["DIM"], font=("Segoe UI", 8))
+        self.ctrl_lbl.grid(row=1, column=3, sticky="w", padx=8)
+        app.button(ports, "⟳ Scan", self.find_robot, small=True).grid(row=0, column=2, rowspan=2, sticky="ns",
+                                                                       pady=2)
 
         cols = tk.Frame(self, bg=p["BG"])
         cols.pack(fill="both", expand=True, padx=18, pady=(0, 10))
@@ -74,7 +89,8 @@ class PersonalizeTab(tk.Frame):
         self.left.pack(side="left", fill="both", expand=True)
         self.right = tk.Frame(cols, bg=p["BG"])
         self.right.pack(side="left", fill="both", expand=True, padx=(12, 0))
-        card = tk.Frame(self.left, bg=p["PANEL"], highlightbackground=p["EDGE"], highlightthickness=1)
+        card = self.voice_card = tk.Frame(self.left, bg=p["PANEL"], highlightbackground=p["EDGE"],
+                                          highlightthickness=1)
         card.pack(fill="x")
         head = tk.Frame(card, bg=p["PANEL"])
         head.pack(fill="x", padx=12, pady=(10, 2))
@@ -110,32 +126,94 @@ class PersonalizeTab(tk.Frame):
         self._build_theme()
         self._build_rambles()
         self._build_personality()
+        for c, needs in ((self.voice_card, "robot"), (self.ramble_card, "robot"), (self.theme_card, "controller")):
+            c._gate = tk.Label(c, text=f"🔒  Needs the {needs} - plug it in by USB, switch it on and hit Scan.",
+                               bg=p["PANEL"], fg=p["WARN"], font=("Segoe UI", 8))
+        self._gate_all()
 
         self.refresh_ports()
         self._looked = False
         self.bind("<Map>", lambda e: self._first_look())
 
     def _first_look(self):
-        # The first time the tab is opened, find the robot by itself
-        if not self._looked and not self.port_var.get():
-            self._looked = True
-            self.find_robot(probe_silent=False)  # just listen: opening a tab shouldn't reset a board
+        # The first time the tab is opened: ask the boards the startup scan found, or look for them (listen only:
+        # opening a tab shouldn't reset a board)
+        if self._looked:
+            return
+        if self.app.busy:  # e.g. the startup scan: ask the boards once it's done
+            self.after(800, self._first_look)
+            return
+        self._looked = True
+        if not self.port_var.get() and not self.ctrl_var.get():
+            self.find_robot(probe_silent=False)
+            return
+        self._read_boards()
+
+    def _read_boards(self, which: str = "both"):
+        """Ask the boards on the chosen ports (once the app isn't busy, e.g. scanning)."""
+        if self.app.busy:
+            self.after(800, lambda: self._read_boards(which))
+            return
+        if which in ("both", "bot") and self.port_var.get():
+            self.read_voice()
+        if which in ("both", "ctrl") and self.ctrl_var.get():
+            self.read_ctrl()
+
+    # --- greying out ---------------------------------------------------------------------------------------
+    def _gate(self, card, on: bool):
+        p = self.pal
+
+        def walk(w):
+            for c in w.winfo_children():
+                if c is getattr(card, "_gate", None):
+                    continue
+                if isinstance(c, (tk.Button, tk.Radiobutton, tk.Checkbutton, tk.Entry)):
+                    c.configure(state="normal" if on else "disabled")
+                elif isinstance(c, tk.Text):
+                    c.configure(state="normal" if on else "disabled", fg=p["TEXT"] if on else p["EDGE"])
+                elif isinstance(c, tk.Canvas):
+                    c.configure(cursor="hand2" if on else "")
+                walk(c)
+        walk(card)
+        gate = getattr(card, "_gate", None)
+        if gate is not None:
+            if on:
+                gate.pack_forget()
+            elif not gate.winfo_ismapped():
+                gate.pack(anchor="w", padx=12, pady=(0, 8), before=card.winfo_children()[1])
+
+    def _gate_all(self):
+        self._gate(self.voice_card, self.robot_ok)
+        self._gate(self.ramble_card, self.robot_ok)
+        self._gate(self.theme_card, self.ctrl_ok)
+
+    def _robot_answered(self, ok: bool):
+        if ok != self.robot_ok:
+            self.robot_ok = ok
+            self._gate_all()
 
     # --- ports ----------------------------------------------------------------------------------------------
     def refresh_ports(self):
         ports = core.list_ports()
         self.port_box.configure(values=[pt.label() for pt in ports])
+        self.ctrl_box.configure(values=[pt.label() for pt in ports])
 
     def use_port(self, kind: str, device: str):
+        if kind == "ctrl":
+            changed = self.ctrl_var.get().split(" ", 1)[0] != device
+            if core.select_port_in(self.ctrl_box, self.ctrl_var, device) and changed and self.winfo_ismapped():
+                self._read_boards("ctrl")
+            return
         if kind == "bot":
             changed = self.port_var.get().split(" ", 1)[0] != device
             if core.select_port_in(self.port_box, self.port_var, device) and changed and self.winfo_ismapped():
-                self.read_voice()
+                self._read_boards("bot")
 
     def _port(self) -> str | None:
         port = self.port_var.get().split(" ", 1)[0]
         if not port:
-            self._say("Pick the robot's port above, or hit Find robot.", "WARN")
+            self._say("Pick the robot's port above, or hit Scan.", "WARN")
+            self._robot_answered(False)
             return None
         if self.app.port_in_use(port) or self.app.busy:
             return None
@@ -150,13 +228,20 @@ class PersonalizeTab(tk.Frame):
         self.app.run_scan(probe_silent=probe_silent, on_done=self._found)
 
     def _found(self, found: dict):
+        if found.get("ctrl"):
+            self._read_boards("ctrl")
+        else:
+            self.ctrl_lbl.configure(text="No controller answered. Plug it in by USB and switch it on.",
+                                    fg=self.pal["WARN"])
+            self.ctrl_ok = False
+            self._gate_all()
         device = found.get("bot")
         if not device:
             self.port_lbl.configure(text="No robot answered. Switch it on (hold the button ~1 s) and try again.",
                                     fg=self.pal["WARN"])
             return
         self.port_lbl.configure(text=f"Robot found on {device}.", fg=self.pal["GREEN"])
-        self.read_voice()
+        self._read_boards("bot")
 
     # --- voice ------------------------------------------------------------------------------------------------
     def _say(self, text: str, colour: str = "DIM"):
@@ -175,7 +260,8 @@ class PersonalizeTab(tk.Frame):
                 r = core.console_command(port, c, tag, timeout_s=4)
                 problem = core.port_problem(r, port)
                 if problem:
-                    self.app.ui(lambda: (setattr(self, "working", False), self._say(problem, "WARN")))
+                    self.app.ui(lambda: (setattr(self, "working", False), self._say(problem, "WARN"),
+                                         self._robot_answered(False)))
                     return
                 out.append(r)
             self.app.ui(lambda: (setattr(self, "working", False), done(out)))
@@ -196,7 +282,10 @@ class PersonalizeTab(tk.Frame):
         """Read everything the robot keeps: voice, names, ramble lines."""
         def done(r):
             v, names, rambles = (r + [None, None, None])[:3]
+            self._robot_answered(bool(v and "preset" in v))
             if v and "preset" in v:
+                self.port_lbl.configure(text=f"Robot found on {self.port_var.get().split(' ', 1)[0]}.",
+                                        fg=self.pal["GREEN"])
                 self._show_current(v["preset"])
                 self._say("")
             else:
@@ -313,7 +402,7 @@ class PersonalizeTab(tk.Frame):
     # --- controller theme -------------------------------------------------------------------------------------
     def _build_theme(self):
         p = self.pal
-        card = self._card(self.left, "CONTROLLER THEME", "The controller's colours. Plug the controller in by USB; it "
+        card = self.theme_card = self._card(self.left, "CONTROLLER THEME", "The controller's colours. Plug the controller in by USB; it "
                                                          "switches straight away (back to its home screen).")
         row = tk.Frame(card, bg=p["PANEL"])
         row.pack(fill="x", padx=12, pady=(0, 4))
@@ -337,20 +426,54 @@ class PersonalizeTab(tk.Frame):
         self.theme_lbl.pack(side="left")
 
     def _ctrl_port(self) -> str | None:
-        port = self.app.known_ports.get("ctrl", "")
+        port = self.ctrl_var.get().split(" ", 1)[0]
         if not port or not core.port_exists(port):
-            self.theme_lbl.configure(text="Plug the controller in by USB, switch it on, and hit Scan above.",
-                                     fg=self.pal["WARN"])
+            self.ctrl_lbl.configure(text="Plug the controller in by USB, switch it on, and hit Scan.",
+                                    fg=self.pal["WARN"])
             return None
         if self.app.port_in_use(port) or self.app.busy:
             return None
         return port
+
+    def read_ctrl(self):
+        """Ask the controller for its theme: it answering is what unlocks the theme card."""
+        port = self._ctrl_port()
+        if not port:
+            self.ctrl_ok = False
+            self._gate_all()
+            return
+        self.ctrl_lbl.configure(text="Asking the controller…", fg=self.pal["DIM"])
+
+        def work():
+            r = core.console_command(port, "theme", "BBTHEME", timeout_s=4)
+            problem = core.port_problem(r, port)
+
+            def ui():
+                ok = bool(r and "theme" in r)
+                self.ctrl_ok = ok
+                self._gate_all()
+                if ok:
+                    n = int(r["theme"])
+                    count = int(r.get("count", "4") or 4)
+                    self._mark_theme(n)
+                    self.app.controller_tab.set_theme(n)
+                    self.ctrl_lbl.configure(text=f"Controller found on {port}." +
+                                            ("" if count >= len(THEMES) else " Its firmware has only the four "
+                                             "original themes - update it (Flash tab) for the new ones."),
+                                            fg=self.pal["GREEN"] if count >= len(THEMES) else self.pal["WARN"])
+                else:
+                    self.ctrl_lbl.configure(text=problem or "No answer - is it the controller, switched on, with "
+                                                            "this release's firmware?", fg=self.pal["WARN"])
+            self.app.ui(ui)
+        threading.Thread(target=work, daemon=True).start()
 
     def _mark_theme(self, n: int | None):
         for i, cv in enumerate(self.theme_btns):
             cv.configure(highlightbackground=self.pal["GREEN"] if i == n else self.pal["EDGE"])
 
     def set_theme(self, n: int):
+        if not self.ctrl_ok:
+            return
         port = self._ctrl_port()
         if not port:
             return
@@ -381,7 +504,7 @@ class PersonalizeTab(tk.Frame):
     # --- your ramble lines ------------------------------------------------------------------------------------
     def _build_rambles(self):
         p = self.pal
-        card = self._card(self.right, "YOUR RAMBLE LINES", "Lines the robot mixes into what it mutters to itself when "
+        card = self.ramble_card = self._card(self.right, "YOUR RAMBLE LINES", "Lines the robot mixes into what it mutters to itself when "
                                                            "idle - one per line, up to 30, 100 characters each. Saved "
                                                            "on the robot.")
         self.rambles = tk.Text(card, height=8, width=56, bg=p["PANEL_HI"], fg=p["TEXT"], relief="flat",
