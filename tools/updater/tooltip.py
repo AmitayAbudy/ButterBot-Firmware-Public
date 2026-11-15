@@ -28,8 +28,9 @@ TIPS = {
     "Save lines": "Save your ramble lines on the robot (replaces the ones it has).",
     "Save personality and facts": "Use this personality and these facts for AI conversations, from the next "
                                   "question. Kept on this PC.",
-    "Apply & hear": "Save the pitch and speed nudges on the robot and hear a sample line.",
-    "Reset": "Back to the preset's own pitch and speed.",
+    "Apply & hear": "Save the pitch and speed nudges on the robot and hear a sample line (with Show accurate: just "
+                    "hear it - its pitch and speed are fixed).",
+    "Reset": "Clear the saved pitch and speed nudges - back to the preset's own - and hear a sample line.",
     "Apply": "Save the brightness and sleep time on the controller.",
     "Save line": "Save the start-up line on the robot - it says it the next time it switches on.",
     "▶ Hear it": "Have the robot say this line now.",

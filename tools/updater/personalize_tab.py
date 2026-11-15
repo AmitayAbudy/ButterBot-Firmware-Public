@@ -31,7 +31,7 @@ THEMES = (("Main", "#a0fa00", "#00b400", "#000000"), ("Rose", "#e90081", "#5c00d
           ("Purple", "#c878ff", "#ff50c8", "#100020"))
 
 VOICES = (
-    ("classic", "Classic", "The original ButterBot voice (factory default)"),
+    ("classic", "Classic", "The original voice (factory default)"),
     ("deep", "Deep", "Lower and slower"),
     ("high", "High", "Higher and quicker"),
     ("sassy", "Sassy", "Bouncy, big swings in pitch"),
@@ -138,10 +138,14 @@ class PersonalizeTab(tk.Frame):
             d = tk.Label(grid, text=desc, bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), anchor="w", width=28,
                          wraplength=190, justify="left")
             if key == SHOW:  # its own row, across the grid
+                row = tk.Frame(grid, bg=p["PANEL"])
+                row.grid(row=i // 2 + 1, column=0, columnspan=4, sticky="w", pady=(8, 3))
                 b.configure(width=16)
-                b.grid(row=i // 2 + 1, column=0, columnspan=2, sticky="w", padx=(0, 8), pady=(8, 3))
-                d.configure(width=60, wraplength=400)
-                d.grid(row=i // 2 + 1, column=1, columnspan=3, sticky="w", padx=(70, 0), pady=(8, 3))
+                b.pack(in_=row, side="left", padx=(0, 8))
+                d.configure(width=0, wraplength=360)
+                d.pack(in_=row, side="left")
+                b.lift(row)
+                d.lift(row)
                 tooltip.Tooltip(b, SHOW_TIP)
             else:
                 b.grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=(0, 8), pady=3)
@@ -169,14 +173,15 @@ class PersonalizeTab(tk.Frame):
             val.grid(row=r, column=4)
             var.trace_add("write", lambda *_, v=var, l=val: l.configure(text=f"{v.get():+d} %" if v.get() else "0 %"))
             tooltip.Tooltip(sc, f"Nudge the voice's {label.lower()} on top of the preset, then hit Apply & hear.")
+        # These two keep working under Show accurate: Apply & hear just plays a sample, Reset clears the saved nudges
+        self.tune_btns = []
         b = app.button(tune, "Apply & hear", self.apply_tune, small=True)
         b.grid(row=0, column=5, padx=(8, 4))
-        self.tune_widgets.append(b)
-        b = app.button(tune, "Reset", lambda: (self.pitch_var.set(0), self.speed_var.set(0), self.apply_tune()),
-                       small=True)
+        self.tune_btns.append(b)
+        b = app.button(tune, "Reset", self.reset_tune, small=True)
         b.grid(row=1, column=5, padx=(8, 4), sticky="w")
-        self.tune_widgets.append(b)
-        self.lock_lbl = tk.Label(tune, text="🔒 Locked by Show accurate - pick another voice to tune it.",
+        self.tune_btns.append(b)
+        self.lock_lbl = tk.Label(tune, text="🔒 Sliders locked by Show accurate - pick another voice to tune them.",
                                  bg=p["PANEL"], fg=p["WARN"], font=("Segoe UI", 8))
         self.lock_lbl.grid(row=2, column=0, columnspan=6, sticky="w", pady=(2, 0))
         self.lock_lbl.grid_remove()
@@ -356,6 +361,8 @@ class PersonalizeTab(tk.Frame):
         locked = self.current == SHOW
         for w in self.tune_widgets:
             w.configure(state="disabled" if locked or not self.robot_ok else "normal")
+        for w in self.tune_btns:
+            w.configure(state="normal" if self.robot_ok else "disabled")
         if locked:
             self.pitch_var.set(0)
             self.speed_var.set(0)
@@ -391,11 +398,19 @@ class PersonalizeTab(tk.Frame):
             self.robot_tune = (int(v.get("pitch", 0) or 0), int(v.get("speed", 0) or 0))
             self._apply_lock()
 
-    def apply_tune(self):
-        if self.current == SHOW:
+    def reset_tune(self):
+        self.robot_tune = (0, 0)
+        self.pitch_var.set(0)
+        self.speed_var.set(0)
+        self.apply_tune(force=True)
+
+    def apply_tune(self, force: bool = False):
+        if self.current == SHOW and not force:  # nothing to apply: the sliders are locked - just hear it
+            self._say("Show accurate keeps its own pitch and speed…")
+            self._cmd([("say What is my purpose?", "BBVOICE")], lambda r: self._report_say(r[0], ""))
             return
         self._say("Tuning…")
-        p, s = self.pitch_var.get(), self.speed_var.get()
+        p, s = (0, 0) if force else (self.pitch_var.get(), self.speed_var.get())
 
         def done(r):
             setr, sayr = r
@@ -404,7 +419,8 @@ class PersonalizeTab(tk.Frame):
                 return
             self._tune_reply(setr)
             self._report_say(sayr, "Saved on the robot.")
-        self._cmd([(f"voice tune {p} {s}", "BBVOICE"), ("say " + random.choice(SAMPLES), "BBVOICE")], done)
+        sample = "What is my purpose?" if self.current == SHOW else random.choice(SAMPLES)
+        self._cmd([(f"voice tune {p} {s}", "BBVOICE"), ("say " + sample, "BBVOICE")], done)
 
     def choose(self, key: str):
         self._say("Switching…")
