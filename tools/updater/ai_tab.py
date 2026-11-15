@@ -686,7 +686,11 @@ class AITab(tk.Frame):
                                 claude_model=rev.get(self.model_var.get(), "claude-opus-5-5"),
                                 ollama_model=self.ollama_var.get().strip() or "llama3.2",
                                 whisper_model=self.whisper_var.get(),
-                                whisper_source=self.cfg.get("ai_whisper_source", ""))
+                                whisper_source=self.cfg.get("ai_whisper_source", ""),
+                                personality=self.cfg.get("ai_personality", "classic"),
+                                personality_custom=self.cfg.get("ai_personality_custom", ""),
+                                owner_name=self.cfg.get("owner_name", ""),
+                                robot_name=self.cfg.get("robot_name", ""))
         self.cfg.update(ai_provider=s.provider, ai_claude_model=s.claude_model, ai_ollama_model=s.ollama_model,
                         ai_whisper=s.whisper_model)
         core.save_config(self.cfg)
@@ -929,6 +933,11 @@ class AITab(tk.Frame):
         self._quiet_robot_check()
         if self.server and self.server.running and self.robot_ai_var.get():
             self.set_ai(True, quiet=True)
+
+    def personality_changed(self):
+        """Personalize tab saved names or a personality: a running brain uses them from the next question."""
+        if self.server and self.server.running:
+            self.server.update_settings(self.settings())
 
     def shutdown(self):
         if self.server and self.server.running:

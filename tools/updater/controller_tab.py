@@ -41,6 +41,9 @@ BUTTONS = {
 STICK_C, STICK_R, KNOB_R = (25, 69), 10, 6.5
 
 HOME_HINTS = ["POKE: EXISTENTIAL DREAD", "SHUT UP: MUTE", "SUMMON: TALK, HOLD: COME", "STICK: DRIVE"]
+ACTIVITY = ["Off", "Chill", "Active", "Hyper"]   # ActivityMode
+FRONT = ["Off", "On"]                            # FrontSensorMode
+BOTTOM = ["Off", "Reduced", "On"]                # BottomSensorMode
 WINDOW_TIMEOUT_S = 20  # back to the home screen if the robot doesn't say it's done
 def _chat_replies() -> tuple[list[str], list[str]]:
     """Chat lines (what you say, what it answers) in the robot's order, from the bundled guide data."""
@@ -65,6 +68,7 @@ class ControllerTab(tk.Frame):
         self.pressed: dict[str, float] = {}
         self.stick = (0, 0)
         self.chat_say, self.chat_reply = _chat_replies()
+        sr.set_theme(int(app.cfg.get("ctrl_theme", 0) or 0))
         self.ble_ok: bool | None = None
         self.battery: int | None = None
         p = pal
@@ -158,6 +162,26 @@ class ControllerTab(tk.Frame):
         btns.pack(fill="x", padx=12)
         app.button(btns, "Send", self._send_entry, small=True).pack(side="left")
         app.button(btns, "Robot status", self._ask_status, small=True).pack(side="left", padx=6)
+
+        # the controller's Settings screen: the robot keeps these, so they work from here too
+        tk.Label(right, text="SETTINGS", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).pack(
+            anchor="w", padx=12, pady=(10, 0))
+        srow = tk.Frame(right, bg=p["PANEL"])
+        srow.pack(fill="x", padx=12, pady=(2, 0))
+        self.set_vars = {}
+        for col, (key, label, options) in enumerate((("activity", "Activity", ACTIVITY),
+                                                     ("front", "Front sensor", FRONT),
+                                                     ("bottom", "Bottom sensor", BOTTOM))):
+            tk.Label(srow, text=label, bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8)).grid(row=0, column=col,
+                                                                                            sticky="w", padx=(0, 10))
+            var = tk.StringVar(value="")
+            ttk.Combobox(srow, textvariable=var, values=options, state="readonly", width=10,
+                         style="Hop.TCombobox").grid(row=1, column=col, sticky="w", padx=(0, 10))
+            self.set_vars[key] = var
+        app.button(srow, "Apply", self._send_settings, small=True).grid(row=1, column=3, sticky="w")
+        self.set_lbl = tk.Label(right, text="Connect to read the robot's settings.", bg=p["PANEL"], fg=p["DIM"],
+                                font=("Segoe UI", 8), wraplength=520, justify="left")
+        self.set_lbl.pack(anchor="w", padx=12)
 
         tk.Label(right, text="FROM THE ROBOT", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).pack(
             anchor="w", padx=12, pady=(10, 2))
@@ -341,6 +365,9 @@ class ControllerTab(tk.Frame):
             if ok:
                 tooltip.relabel(self.connect_btn, "Disconnect")
                 self._home()
+                self._quiet_status = True
+                self.after(600, lambda: self.link is not None and self.link.connected and
+                           self.link.send(cl.command("Status")))
             elif self.link is not None and not self.link.connected and text not in ("Connecting…",) \
                     and not text.startswith(("Looking", "Connecting")):
                 self._ended()
@@ -513,6 +540,24 @@ class ControllerTab(tk.Frame):
         if self._send(cl.scenario(name, data)):
             self._log(f"→ {label}")
 
+    def _send_settings(self):
+        vals = {k: v.get() for k, v in self.set_vars.items()}
+        if "" in vals.values():
+            self.set_lbl.configure(text="Connect first, so the current settings can be read.", fg=self.pal["WARN"])
+            return
+        payload = bytes([FRONT.index(vals["front"]), BOTTOM.index(vals["bottom"]), ACTIVITY.index(vals["activity"])])
+        if self._send(cl.command("Settings", payload)):
+            self.set_lbl.configure(text="Sent. (The hardware controller's Settings screen keeps its own copy, so it "
+                                        "may show the old values until you change them there.)", fg=self.pal["GREEN"])
+            self._log(f"settings: activity {vals['activity']}, front {vals['front']}, bottom {vals['bottom']}")
+
+    def set_theme(self, n: int):
+        """Draw the screen in the controller's theme (Personalize tab)."""
+        sr.set_theme(n)
+        self.app.cfg["ctrl_theme"] = n
+        core.save_config(self.app.cfg)
+        self._paint()
+
     def _ask_status(self):
         if self._send(cl.command("Status")):
             self._show(["Asking the robot..."], title="Robot Status")
@@ -532,7 +577,9 @@ class ControllerTab(tk.Frame):
         self.after(150, lambda: self.cv.itemconfigure(self.led_big, fill="#2d5a36"))
         d = m.data
         if m.state == "Idle" and m.action == "RobotStatus":
-            self._robot_status(d)
+            quiet = getattr(self, "_quiet_status", False)
+            self._quiet_status = False
+            self._robot_status(d, quiet=quiet)
             return
         if m.state == "Idle" and m.action == "BatteryLevel":
             self.battery = d[0] if d else None  # 0 = critical .. 6 = full; sent on connect and when it changes
@@ -555,12 +602,30 @@ class ControllerTab(tk.Frame):
         text = " / ".join(x for x in ([w.big] if w.big else []) + w.lines if x)
         self._log(f"{w.title.lower()}: {text}" if text else w.title.lower())
 
-    def _robot_status(self, d: bytes):
+    def _robot_status(self, d: bytes, quiet: bool = False):
         if len(d) < 9:
             return
         batt, charge, ram, ram_min, wifi, ai, brain, up_lo, up_hi = d[:9]
-        m = cl.Message("Idle", "RobotStatus", d[9:])
-        fw, network, problem, heard, said = (m.strings() + [""] * 5)[:5]
+        # five length-prefixed strings, then (newer robots) its settings: front, bottom, activity
+        texts, i = [], 9
+        for _ in range(5):
+            n = d[i] if i < len(d) else 0
+            texts.append(d[i + 1:i + 1 + n].decode("utf-8", "replace"))
+            i += 1 + n
+        fw, network, problem, heard, said = texts
+        if len(d) >= i + 3:
+            front, bottom, activity = d[i:i + 3]
+            for key, val, opts in (("front", front, FRONT), ("bottom", bottom, BOTTOM),
+                                   ("activity", activity, ACTIVITY)):
+                if val < len(opts):
+                    self.set_vars[key].set(opts[val])
+            self.set_lbl.configure(text="These are the robot's settings now. Change them and hit Apply.",
+                                   fg=self.pal["DIM"])
+        else:
+            self.set_lbl.configure(text="This robot's firmware doesn't report its settings - update it (Flash tab).",
+                                   fg=self.pal["WARN"])
+        if quiet:
+            return
         up = up_lo | up_hi << 8
         lines = [f"Battery {batt}%" + (", charging" if charge == 1 else (", full" if charge == 2 else "")),
                  f"Memory {ram} KB (low {ram_min})",

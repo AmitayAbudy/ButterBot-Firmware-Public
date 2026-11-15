@@ -10,6 +10,8 @@
 #include "Audio/SpeechAudioSource.h"
 #include "Audio/SpeechGen.h"
 #include "Services/Com.h"
+#include "Services/Personal.h"
+#include <esp_random.h>
 
 DEFINE_LOG(RambleRoutine)
 
@@ -21,6 +23,18 @@ Routine::TickingState RambleRoutine::tick(float deltaTime){
     if(audio == nullptr || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance || com == nullptr){
         CMF_LOG(RambleRoutine, LogLevel::Error, "Missing required service(s)");
         return TickingState::Done; // Fail soft: skip the routine instead of rebooting the robot
+    }
+
+    // Fork: half the time, one of the owner's own lines (Personalize tab). The controller has no text for those,
+    // so it gets them as a speech window (Subtitle with nothing heard)
+    if(Personal::lineCount() > 0 && (esp_random() & 1)){
+        const std::string line = Personal::randomLine();
+        SubtitleData subtitle;
+        subtitle.say = line;
+        com->sendData(BB::State::Scenario, BB::Action::Scenario::Subtitle, subtitle);
+        audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, line));
+        audio->waitEnd(portMAX_DELAY);
+        return TickingState::Done;
     }
 
     const int16_t id = Phrases::get(Phrase::Ramble);

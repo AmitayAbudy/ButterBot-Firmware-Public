@@ -1,4 +1,5 @@
 #include "PersonRoutine.h"
+#include "Services/Personal.h"
 #include "States/BBStateMachine.h"
 #include <Statics/ApplicationStatics.h>
 #include <Core/Application.h>
@@ -195,7 +196,13 @@ void PersonRoutine::greet(){
 	data.greetKnown = greetKnown;
 	com->sendData(BB::State::Idle, BB::Action::Idle::Person, data);
 
-	auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, Phrases::map(phrase, id));
+	// Fork: the owner's name from the Personalize tab, before the greeting ("Paul! Good to see you")
+	std::string text = Phrases::map(phrase, id);
+	if(greetKnown){
+		const std::string owner = Personal::owner();
+		if(!owner.empty()) text = owner + "! " + text;
+	}
+	auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text);
 	audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
 	audio->waitEnd(portMAX_DELAY);
 }

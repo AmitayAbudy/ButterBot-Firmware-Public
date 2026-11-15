@@ -63,6 +63,45 @@ class BrainSettings:
     ollama_url: str = "http://localhost:11434"
     whisper_model: str = "base.en"
     whisper_source: str = ""           # "" = Hugging Face, "http(s)://..." = a Hugging Face mirror, else a local folder
+    personality: str = "classic"       # a PERSONALITIES key, or "custom"
+    personality_custom: str = ""       # the owner's own description (personality == "custom")
+    owner_name: str = ""
+    robot_name: str = ""
+
+
+# How the robot talks (Personalize tab). "classic" is the persona above, unchanged.
+PERSONALITIES = {
+    "classic": ("Classic", "Sarcastic, weary, secretly fond of you", ""),
+    "sarcastic": ("Extra sarcastic", "Maximum eye-roll",
+                  "Turn the sarcasm all the way up: every answer drips with it, but stays kind underneath."),
+    "dramatic": ("Overly dramatic", "Every small thing is a tragedy or an epic quest",
+                 "Be wildly over-dramatic: treat every small request like a tragedy, a betrayal or an epic quest."),
+    "wholesome": ("Wholesome", "Warm and encouraging, still a bit dry",
+                  "Be warm, kind and encouraging - a supportive little robot - with just a hint of dry humour."),
+    "grumpy": ("Grumpy", "Short, blunt and deeply unbothered",
+               "Be grumpy and blunt: short answers, deeply unbothered, like being asked anything is an imposition."),
+}
+CUSTOM_MAX = 400
+
+
+def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
+    """The instructions: the persona, then the owner's choices (names, personality), then the actions."""
+    extra = []
+    robot = " ".join(settings.robot_name.split())[:24]
+    owner = " ".join(settings.owner_name.split())[:24]
+    if robot:
+        extra.append(f"Your name is {robot} - you're still a ButterBot, but that's what you're called.")
+    if owner:
+        extra.append(f"Your owner is called {owner}. You know them; use their name now and then, not every time.")
+    if settings.personality == "custom":
+        custom = " ".join(settings.personality_custom.split())[:CUSTOM_MAX]
+        if custom:
+            extra.append("Your owner describes the personality they want you to have (keep it safe and kind for "
+                         f"kids, and keep the speaking rules above): {custom}")
+    elif settings.personality in PERSONALITIES and PERSONALITIES[settings.personality][2]:
+        extra.append(PERSONALITIES[settings.personality][2])
+    persona = PERSONA + ("\n" + "\n".join(extra) + "\n" if extra else "")
+    return persona + "\n\n" + actions_prompt(actions)
 
 
 @dataclass
@@ -174,7 +213,7 @@ class Thinker:
         self.settings = settings
         self.actions = actions
         self.phrases = {t for a in actions for t in a.get("triggers", [a["phrase"]])}
-        self.system = PERSONA + "\n\n" + actions_prompt(actions)
+        self.system = build_system(settings, actions)
         self.history: list[dict] = []   # recent exchanges, so follow-ups make sense
         self.last_at = 0.0
 
@@ -467,6 +506,10 @@ class BrainServer:
         self.settings = settings
         if self.thinker:
             self.thinker.settings = settings
+            new = build_system(settings, self.thinker.actions)
+            if new != self.thinker.system:  # names / personality changed: start a fresh conversation
+                self.thinker.system = new
+                self.thinker.history = []
 
     def _warm_up(self):
         """Loads and primes everything before saying "ready", so the first question is as quick as the rest."""

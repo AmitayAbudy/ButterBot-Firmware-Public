@@ -21,6 +21,17 @@ GREEN_DARK = (0, 180, 0)    # secondary
 BLACK = (0, 0, 0)           # tertiary (background)
 GRID = (0, 46, 0)
 
+# the controller's themes (ThemeService.cpp): primary, secondary, background
+THEMES = [((160, 250, 0), (0, 180, 0), (0, 0, 0)), ((233, 0, 129), (92, 0, 215), (0, 0, 0)),
+          ((225, 56, 0), (255, 174, 0), (42, 22, 0)), ((3, 0, 163), (255, 174, 0), (255, 255, 255))]
+
+
+def set_theme(n: int):
+    """Draw with one of the controller's colour themes (0 Main, 1 Rose, 2 Red, 3 Blue)."""
+    global GREEN, GREEN_DARK, BLACK, GRID
+    GREEN, GREEN_DARK, BLACK = THEMES[n if 0 <= n < len(THEMES) else 0]
+    GRID = tuple(int(b + (p - b) * 0.18) for p, b in zip(GREEN, BLACK))
+
 
 def _data() -> dict:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))

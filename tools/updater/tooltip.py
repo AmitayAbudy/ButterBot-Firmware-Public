@@ -23,6 +23,10 @@ TIPS = {
     "Done": "Close this window.",
     # Diagnostics / Console
     "⟳": "Refresh the list of USB ports.",
+    "Apply": "Send these settings to the robot (it keeps them).",
+    "Save names": "Save your name and the robot's name on the robot (and for the AI on this PC).",
+    "Save lines": "Save your ramble lines on the robot (replaces the ones it has).",
+    "Save personality": "Use this personality for AI conversations, from the next question.",
     "About": "Who made Dimension Hopper, its version and where to find the project. Also: reset the tab order.",
     "⟳ Scan": "Find which board is on which USB port (a few seconds). What it finds fills in the port lists in "
               "every tab.",

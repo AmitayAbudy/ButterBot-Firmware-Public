@@ -49,6 +49,7 @@
 #include "Audio/SpeechGen.h"
 #include "Audio/VoicePreset.h"
 #include "Services/HomeWiFi.h"
+#include "Services/Personal.h"
 #include "Services/BrainLink.h"
 #include <lwip/inet.h>
 #include <Util/ServiceLocator.h>
@@ -130,6 +131,7 @@ protected:
 		}
 		ESP_ERROR_CHECK(ret);
 		Voice::load(); // fork: the chosen voice preset, before anything speaks
+		Personal::load(); // fork: owner / robot names and the owner's ramble lines
 
 		if(!SPIFFS::init()){
 			CMF_LOG(Butterbot, LogLevel::Error, "SPIFFS init failed, aborting startup");
@@ -456,6 +458,15 @@ private:
 						printf("[BBEMU] mirror=%d\n", Com::mirrorToConsole ? 1 : 0);
 					}
 					else if(line.rfind("ctrl ", 0) == 0) consoleCtrl(line.c_str() + 5);
+					else if(line == "names") printNames();
+					else if(line.rfind("names ", 0) == 0) runFlashJob([args = line.substr(6)]{ setNames(args); });
+					else if(line == "ramble") printRambles();
+					else if(line == "ramble clear") runFlashJob([]{ Personal::clearLines(); printRambles(); });
+					else if(line.rfind("ramble add ", 0) == 0) runFlashJob([hex = line.substr(11)]{
+						const std::string text = fromHex(hex.c_str(), hex.size());
+						printf("[BBRAMBLE] result=%s\n", Personal::addLine(text) ? "added" : "full");
+						printRambles();
+					});
 					else if(line.rfind("drive ", 0) == 0) consoleDrive(line.c_str() + 6);
 					else if(line == "stop") stopConsoleDrive("stop");
 					else if(line == "forget") runFlashJob([]{ forgetBonds(); });
@@ -618,6 +629,55 @@ private:
 		}
 	}
 
+	/*
+	 * Fork: personal touches from Dimension Hopper's Personalize tab. Names and lines travel hex-encoded so spaces
+	 * and symbols survive: "names <hex owner|-> <hex robot|->", "ramble add <hex line>", "ramble clear".
+	 * Replies: [BBNAMES] owner=<hex|-> robot=<hex|->, [BBRAMBLE] count=N max=N d=<hex>,<hex>,... (one line).
+	 */
+	static std::string toHex(const std::string& s){
+		static constexpr char Digits[] = "0123456789abcdef";
+		std::string out;
+		for(const unsigned char c : s){
+			out += Digits[c >> 4];
+			out += Digits[c & 15];
+		}
+		return out.empty() ? "-" : out;
+	}
+
+	static void printNames(){
+		std::string owner, robot;
+		{
+			std::lock_guard<std::mutex> g(Personal::lock);
+			owner = Personal::ownerName;
+			robot = Personal::robotName;
+		}
+		printf("[BBNAMES] owner=%s robot=%s\n", toHex(owner).c_str(), toHex(robot).c_str());
+	}
+
+	static void setNames(const std::string& args){
+		const size_t sp = args.find(' ');
+		const std::string a = args.substr(0, sp), b = sp == std::string::npos ? "-" : args.substr(sp + 1);
+		auto decode = [](const std::string& h){ return h == "-" ? std::string() : fromHex(h.c_str(), h.size()); };
+		Personal::setNames(decode(a), decode(b));
+		printNames();
+	}
+
+	static void printRambles(){
+		std::vector<std::string> copy;
+		{
+			std::lock_guard<std::mutex> g(Personal::lock);
+			copy = Personal::lines;
+		}
+		// One line, so a one-shot console command gets everything: d=<hex>,<hex>,... ("-" when there are none)
+		std::string all;
+		for(size_t i = 0; i < copy.size(); ++i){
+			if(i) all += ',';
+			all += toHex(copy[i]);
+		}
+		printf("[BBRAMBLE] count=%u max=%u d=%s\n", (unsigned) copy.size(), (unsigned) Personal::MaxLines,
+		       all.empty() ? "-" : all.c_str());
+	}
+
 	/** Fork: "ctrl <hex>" - a controller message from Dimension Hopper's emulated controller over USB. */
 	void consoleCtrl(const char* hex){
 		const std::string bytes = fromHex(hex, strlen(hex));
@@ -740,6 +800,12 @@ private:
 		auto kb = [](size_t bytes){ return (uint8_t) std::min<size_t>(bytes / 1024, 255); };
 
 		RobotStatusData st;
+		if(ServiceLocator::SettingsInstance){
+			const SettingsStruct s = ServiceLocator::SettingsInstance->get();
+			st.frontSensor = (uint8_t) s.frontSensor;
+			st.bottomSensor = (uint8_t) s.bottomSensor;
+			st.activity = (uint8_t) s.activityMode;
+		}
 		if(battery != nullptr){
 			st.battery = (uint8_t) std::clamp(battery->getPerc() + 0.5f, 0.0f, 100.0f);
 			switch(battery->getChargingState()){

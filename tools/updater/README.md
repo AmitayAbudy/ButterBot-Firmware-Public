@@ -51,8 +51,14 @@ Every voice command and the controller's buttons, with pictures.
 
 ![Personalize tab](../../docs/images/personalize.png)
 
-Settings that live on the robot. Right now: its **voice** - click one of the eight presets to switch to it and hear a
-sample. Classic is the stock voice.
+Make the robot yours:
+- **Voice** - eight presets; click one to switch and hear a sample. Classic is the stock voice.
+- **Names** - yours (it greets you by name when it recognises your face) and the robot's; both are used by the AI too.
+- **Controller theme** - Main, Rose, Red or Blue; the controller (plugged in by USB) restarts to switch.
+- **Your ramble lines** - up to 30 of your own lines, mixed into what the robot mutters when idle.
+- **AI personality** - classic, extra sarcastic, overly dramatic, wholesome, grumpy, or your own description.
+
+Voice, names and lines are saved on the robot, so they survive updates.
 
 ### Diagnostics
 The robot and the controller side by side, each with its own port and Connect button (both can be connected at once;
@@ -75,6 +81,8 @@ own icons and animations) showing what the robot sends, the controller's whole a
 - **Bluetooth:** wireless, like the real controller (greyed out, with the reason, if this PC has no Bluetooth).
   **The robot takes one controller at a time**: switch the hardware controller off before connecting here; when you
   disconnect, it reconnects by itself and keeps its pairing.
+- **Settings** (activity, front and bottom sensor), like the controller's Settings screen; read from the robot when
+  you connect.
 - RC mode with the camera still needs the hardware controller (it makes the WiFi hotspot the camera streams to); here
   the stick drives the robot directly.
 
