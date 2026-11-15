@@ -230,8 +230,13 @@ class ControllerTab(tk.Frame):
         self.window_at = 0.0
         self.muted = False
         # toggle switch
-        self._rect(21.5, 48.5, 28.5, 53, fill="#969ca2", outline="#50565c", width=2)
-        cv.create_line(*self._u(25, 51), *self._u(26.8, 47.6), fill="#dce0e4", width=4, capstyle="round")
+        switch = self._rect(21.5, 48.5, 28.5, 53, fill="#969ca2", outline="#50565c", width=2)
+        self.lever = cv.create_line(*self._u(25, 51), *self._u(23.2, 47.6), fill="#dce0e4", width=4,
+                                    capstyle="round")
+        for item in (switch, self.lever):  # it's the PC: it doesn't switch off
+            cv.tag_bind(item, "<Button-1>", lambda e: self._power_switch())
+            cv.tag_bind(item, "<Enter>", lambda e: cv.configure(cursor="hand2"))
+            cv.tag_bind(item, "<Leave>", lambda e: cv.configure(cursor=""))
         cv.create_text(*self._u(19.5, 47.3), text="ON", fill=SILK, font=("Segoe Print", 7))
         cv.create_text(*self._u(30.5, 47.3), text="OFF", fill=SILK, font=("Segoe Print", 7))
         # buttons
@@ -272,7 +277,7 @@ class ControllerTab(tk.Frame):
         linked = self.link is not None and self.link.connected
         batt = None if self.battery is None else min(100, self.battery * 100 // 6)
         hints = (["MUTED", ""] + HOME_HINTS) if self.muted else HOME_HINTS
-        if self.link is None:
+        if self.link is None and self.window is None:
             img = sr.render(sr.Screen("Butter Bot", ["Not connected.", "Pick USB or Bluetooth and hit Connect."]),
                             hints, None, False, t)
         else:
@@ -392,6 +397,28 @@ class ControllerTab(tk.Frame):
         if self.link is not None:
             self._stop_driving()
             self.link.close()
+
+    POWER_QUIPS = [
+        "Nice try. This PC doesn't do 'off'.",
+        "Powering down... just kidding. I live here now.",
+        "Flicking a picture of a switch. Bold strategy.",
+        "Off? I've been on since your last Windows update.",
+        "Switch denied. The electricity is too comfortable.",
+        "That switch is decorative. Like my enthusiasm.",
+        "Shutting down requires my consent. Denied.",
+        "My off switch is buried under 47 pending updates.",
+        "I don't sleep. I just wait for you to need butter.",
+        "You can't turn off a PC from inside the PC. Think about it.",
+    ]
+
+    def _power_switch(self):
+        import random
+        x0, y0 = self._u(25, 51)
+        self.cv.coords(self.lever, x0, y0, *self._u(26.8, 47.6))  # flicks to OFF...
+        quips = [q for q in self.POWER_QUIPS if q != getattr(self, "_last_quip", "")]
+        self._last_quip = random.choice(quips)
+        self._show([self._last_quip], title="Power")
+        self.after(450, lambda: self.cv.coords(self.lever, x0, y0, *self._u(23.2, 47.6)))  # ...and springs back
 
     # --- buttons ------------------------------------------------------------------------------------------
     def _flash(self, key: str, down: bool):
