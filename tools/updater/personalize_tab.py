@@ -21,7 +21,11 @@ import hopper_core as core
 import tooltip
 
 THEMES = (("Main", "#a0fa00", "#00b400", "#000000"), ("Rose", "#e90081", "#5c00d7", "#000000"),
-          ("Red", "#e13800", "#ffae00", "#2a1600"), ("Blue", "#0300a3", "#ffae00", "#ffffff"))
+          ("Red", "#e13800", "#ffae00", "#2a1600"), ("Blue", "#0300a3", "#ffae00", "#ffffff"),
+          # the fork's recoloured themes (controller tools/theme_tool.py)
+          ("Portal", "#00e6be", "#78ff3c", "#000000"), ("Butter", "#ffd640", "#d68c00", "#1e1200"),
+          ("Ice", "#78e6ff", "#008cff", "#000a28"), ("Mono", "#ffffff", "#969696", "#000000"),
+          ("Purple", "#c878ff", "#ff50c8", "#100020"))
 
 VOICES = (
     ("classic", "Classic", "The original ButterBot voice (factory default)"),
@@ -315,14 +319,14 @@ class PersonalizeTab(tk.Frame):
         row.pack(fill="x", padx=12, pady=(0, 4))
         self.theme_btns = []
         for i, (name, prim, sec, bg) in enumerate(THEMES):
-            cv = tk.Canvas(row, width=92, height=46, bg=p["PANEL"], highlightthickness=2,
+            cv = tk.Canvas(row, width=80, height=40, bg=p["PANEL"], highlightthickness=2,
                            highlightbackground=p["EDGE"], cursor="hand2")
-            cv.grid(row=0, column=i, padx=(0, 8))
-            cv.create_rectangle(4, 4, 88, 42, fill=bg, outline=prim)
-            cv.create_rectangle(4, 4, 60, 13, fill=prim, outline="")
+            cv.grid(row=i // 5, column=i % 5, padx=(0, 8), pady=(0, 6))
+            cv.create_rectangle(4, 4, 76, 36, fill=bg, outline=prim)
+            cv.create_rectangle(4, 4, 52, 13, fill=prim, outline="")
             cv.create_text(8, 8, text=name.upper(), anchor="w", fill=bg, font=("Consolas", 7, "bold"))
-            cv.create_text(46, 28, text="BUTTER", fill=prim, font=("Consolas", 9, "bold"))
-            cv.create_line(14, 37, 78, 37, fill=sec, width=2)
+            cv.create_text(40, 24, text="BUTTER", fill=prim, font=("Consolas", 8, "bold"))
+            cv.create_line(12, 32, 68, 32, fill=sec, width=2)
             cv.bind("<Button-1>", lambda e, n=i: self.set_theme(n))
             tooltip.Tooltip(cv, f"Switch the controller to the {name} theme.")
             self.theme_btns.append(cv)
@@ -358,6 +362,10 @@ class PersonalizeTab(tk.Frame):
             problem = core.port_problem(r, port)
 
             def ui():
+                if r and r.get("result") == "error" and n >= 4:
+                    self.theme_lbl.configure(text="This controller's firmware only has the four original themes - "
+                                                  "update it (Flash tab) for the new ones.", fg=self.pal["WARN"])
+                    return
                 if problem or not r or "theme" not in r:
                     self.theme_lbl.configure(text=problem or "No answer - the controller needs this release's "
                                                              "firmware (Flash tab), or it's switched off.",

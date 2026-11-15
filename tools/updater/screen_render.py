@@ -23,11 +23,15 @@ GRID = (0, 46, 0)
 
 # the controller's themes (ThemeService.cpp): primary, secondary, background
 THEMES = [((160, 250, 0), (0, 180, 0), (0, 0, 0)), ((233, 0, 129), (92, 0, 215), (0, 0, 0)),
-          ((225, 56, 0), (255, 174, 0), (42, 22, 0)), ((3, 0, 163), (255, 174, 0), (255, 255, 255))]
+          ((225, 56, 0), (255, 174, 0), (42, 22, 0)), ((3, 0, 163), (255, 174, 0), (255, 255, 255)),
+          ((0, 230, 190), (120, 255, 60), (0, 0, 0)), ((255, 214, 64), (214, 140, 0), (30, 18, 0)),
+          ((120, 230, 255), (0, 140, 255), (0, 10, 40)), ((255, 255, 255), (150, 150, 150), (0, 0, 0)),
+          ((200, 120, 255), (255, 80, 200), (16, 0, 32))]
 
 
 def set_theme(n: int):
-    """Draw with one of the controller's colour themes (0 Main, 1 Rose, 2 Red, 3 Blue)."""
+    """Draw with one of the controller's colour themes (0 Main, 1 Rose, 2 Red, 3 Blue, then the fork's Portal, Butter,
+    Ice, Mono, Purple)."""
     global GREEN, GREEN_DARK, BLACK, GRID
     GREEN, GREEN_DARK, BLACK = THEMES[n if 0 <= n < len(THEMES) else 0]
     GRID = tuple(int(b + (p - b) * 0.18) for p, b in zip(GREEN, BLACK))
