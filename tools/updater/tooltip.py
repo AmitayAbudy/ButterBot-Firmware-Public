@@ -23,6 +23,7 @@ TIPS = {
     "Done": "Close this window.",
     # Diagnostics / Console
     "⟳": "Refresh the list of USB ports.",
+    "About": "Who made Dimension Hopper, its version and where to find the project. Also: reset the tab order.",
     "⟳ Scan": "Find which board is on which USB port (a few seconds). What it finds fills in the port lists in "
               "every tab.",
     "Robot status": "Ask the robot for its battery, memory, WiFi, AI mode and firmware, like the controller's "

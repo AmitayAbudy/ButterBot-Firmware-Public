@@ -11,6 +11,9 @@ Every button has a tooltip: hover over it to see what it does.
 
 ## Tabs
 
+Drag a tab left or right to reorder the tabs; the order is remembered (**About** → *Reset tab order* puts it back).
+**About** (top right) shows the version, the author and the project links.
+
 ### Flash
 
 ![Flash tab](../../docs/images/flash.png)

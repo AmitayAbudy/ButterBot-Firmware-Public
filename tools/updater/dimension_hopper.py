@@ -33,6 +33,8 @@ from hopper_core import Kind
 
 APP_TITLE = "Dimension Hopper"
 VERSION = "1.3.0"
+ROBOT_REPO = "Exadon/ButterBot-Firmware-Public"
+CTRL_REPO = "Exadon/ButterBotCtrl-Firmware-Public"
 
 # --- palette: portal-fluid green on lab-floor black --------------------------------------
 BG = "#070b08"
@@ -525,9 +527,10 @@ class App:
         self.headline = tk.Label(titles, text="Plug a board in over USB-C. I'll do the science.", bg=BG, fg=DIM,
                                  font=("Segoe UI", 10, "italic"))
         self.headline.pack(anchor="w", pady=(6, 0))
+        self.button(top, "About", self.show_about, small=True).pack(side="right", anchor="n", pady=(6, 0))
 
         # tabs: Flash (the updater) and Guide (controls + voice commands)
-        nb = ttk.Notebook(root, style="Hop.TNotebook")
+        nb = self.nb = ttk.Notebook(root, style="Hop.TNotebook")
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         flash = tk.Frame(nb, bg=BG)
         nb.add(flash, text="  Flash  ")
@@ -544,6 +547,7 @@ class App:
         nb.add(self.console_tab, text="  Console  ")
         self.ai_tab = AITab(nb, pal, self)
         nb.add(self.ai_tab, text="  AI  ")
+        self._tab_order_init()
 
         # devices
         mid = tk.Frame(flash, bg=BG)
@@ -697,6 +701,78 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     # --- scan / probe -----------------------------------------------------------------------
+    # --- tab order: drag a tab sideways to move it; the order is remembered ---------------------------------------
+    def _tab_key(self, widget) -> str:
+        return self.nb.tab(widget, "text").strip().lower()
+
+    def _tab_order_init(self):
+        self.default_tab_order = [self._tab_key(t) for t in self.nb.tabs()]
+        self._apply_tab_order(self.cfg.get("tab_order") or [])
+        self._dragged_tab = None
+        self.nb.bind("<ButtonPress-1>", self._tab_press, add="+")
+        self.nb.bind("<B1-Motion>", self._tab_drag, add="+")
+        self.nb.bind("<ButtonRelease-1>", self._tab_release, add="+")
+
+    def _apply_tab_order(self, order: list[str]):
+        by_key = {self._tab_key(t): t for t in self.nb.tabs()}
+        known = [k for k in order if k in by_key] + [k for k in by_key if k not in order]  # new tabs go at the end
+        for i, k in enumerate(known):
+            self.nb.insert(i, by_key[k])
+
+    def _tab_at(self, x: int, y: int) -> int | None:
+        if self.nb.identify(x, y) == "":
+            return None
+        try:
+            return self.nb.index(f"@{x},{y}")
+        except tk.TclError:
+            return None
+
+    def _tab_press(self, e):
+        i = self._tab_at(e.x, e.y)
+        self._dragged_tab = self.nb.tabs()[i] if i is not None else None
+
+    def _tab_drag(self, e):
+        if self._dragged_tab is None:
+            return
+        target = self._tab_at(e.x, e.y)
+        if target is not None and target != self.nb.index(self._dragged_tab):
+            self.nb.insert(target, self._dragged_tab)
+            self.nb.configure(cursor="sb_h_double_arrow")
+
+    def _tab_release(self, _e):
+        if self._dragged_tab is None:
+            return
+        self._dragged_tab = None
+        self.nb.configure(cursor="")
+        order = [self._tab_key(t) for t in self.nb.tabs()]
+        if order != self.cfg.get("tab_order"):
+            self.cfg["tab_order"] = order
+            core.save_config(self.cfg)
+
+    def reset_tab_order(self):
+        self._apply_tab_order(self.default_tab_order)
+        self.cfg.pop("tab_order", None)
+        core.save_config(self.cfg)
+
+    # --- about -----------------------------------------------------------------------------------------------
+    def show_about(self):
+        message = (f"Version {VERSION}\n\n"
+                   "Made by Paul Binder.\n\n"
+                   "Part of the ButterBot community fork - firmware for the robot and the controller, and this app "
+                   "to update them, set up AI conversations and drive the robot from the PC.\n\n"
+                   "Based on the original ButterBot firmware by CircuitMess (MIT License). An unofficial community "
+                   "project, not made by or affiliated with CircuitMess.\n\n"
+                   "Tip: drag a tab left or right to reorder the tabs.")
+        details = ["Robot firmware + this app:", "  github.com/" + ROBOT_REPO,
+                   "Controller firmware:", "  github.com/" + CTRL_REPO]
+        choice = HopDialog(self.root, self.pal, self.button, "info", "Dimension Hopper", message, details,
+                           buttons=("Close", "Open on GitHub", "Reset tab order"), default=0, cancel=0).run()
+        if choice == 1:
+            import webbrowser
+            webbrowser.open("https://github.com/" + ROBOT_REPO)
+        elif choice == 2:
+            self.reset_tab_order()
+
     def refresh_ports(self, auto_assign=False) -> list[core.PortInfo]:
         ports = core.list_ports()
         for s in self.slots.values():
