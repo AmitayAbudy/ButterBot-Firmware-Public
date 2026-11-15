@@ -690,7 +690,8 @@ class AITab(tk.Frame):
                                 personality=self.cfg.get("ai_personality", "classic"),
                                 personality_custom=self.cfg.get("ai_personality_custom", ""),
                                 owner_name=self.cfg.get("owner_name", ""),
-                                robot_name=self.cfg.get("robot_name", ""))
+                                robot_name=self.cfg.get("robot_name", ""),
+                                facts=self.cfg.get("ai_facts", ""))
         self.cfg.update(ai_provider=s.provider, ai_claude_model=s.claude_model, ai_ollama_model=s.ollama_model,
                         ai_whisper=s.whisper_model)
         core.save_config(self.cfg)

@@ -67,6 +67,7 @@ class BrainSettings:
     personality_custom: str = ""       # the owner's own description (personality == "custom")
     owner_name: str = ""
     robot_name: str = ""
+    facts: str = ""                    # things about the owner, one per line (Personalize tab)
 
 
 # How the robot talks (Personalize tab). "classic" is the persona above, unchanged.
@@ -82,6 +83,7 @@ PERSONALITIES = {
                "Be grumpy and blunt: short answers, deeply unbothered, like being asked anything is an imposition."),
 }
 CUSTOM_MAX = 400
+FACTS_MAX = 600
 
 
 def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
@@ -100,7 +102,12 @@ def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
                          f"kids, and keep the speaking rules above): {custom}")
     elif settings.personality in PERSONALITIES and PERSONALITIES[settings.personality][2]:
         extra.append(PERSONALITIES[settings.personality][2])
-    persona = PERSONA + ("\n" + "\n".join(extra) + "\n" if extra else "")
+    facts = [" ".join(f.split()) for f in settings.facts.splitlines()]
+    facts = "; ".join(f for f in facts if f)[:FACTS_MAX]
+    if facts:
+        extra.append("Things you know about your owner (bring one up now and then when it fits naturally - don't "
+                     f"list them, and don't mention them every time): {facts}")
+    persona =PERSONA + ("\n" + "\n".join(extra) + "\n" if extra else "")
     return persona + "\n\n" + actions_prompt(actions)
 
 

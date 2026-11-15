@@ -158,7 +158,7 @@ namespace {
         const StartPrompt& prompt = StartPrompts[rand() % std::size(StartPrompts)];
         // Fork: durations were measured with the stock voice; a faster/slower voice preset scales them, and the
         // prompt must still end when the recogniser is ready.
-        const uint32_t promptMs = static_cast<uint32_t>(prompt.durationMs * Voice::current().stretch / Voice::StockStretch);
+        const uint32_t promptMs = static_cast<uint32_t>(prompt.durationMs * Voice::stretch() / Voice::StockStretch);
         const uint32_t budget = promptMs >= IntroWindowMs ? 0 : IntroWindowMs - promptMs;
 
         const SfxGroup& group = SfxGroups[rand() % std::size(SfxGroups)];

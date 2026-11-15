@@ -50,6 +50,7 @@
 #include "Audio/VoicePreset.h"
 #include "Services/HomeWiFi.h"
 #include "Services/Personal.h"
+#include <Scenarios.h>
 #include "Services/BrainLink.h"
 #include <lwip/inet.h>
 #include <Util/ServiceLocator.h>
@@ -329,7 +330,9 @@ protected:
 
 		server->start();
 
-		speakAndWait(audio, Phrase::Startup);
+		// Fork: the owner's own start-up line (Personalize tab), else the stock one
+		if(const std::string own = Personal::startupText(); !own.empty()) speakTextAndWait(audio, own);
+		else speakAndWait(audio, Phrase::Startup);
 		memMark("startup speech");
 
 		ServiceLocator::SC7A20Instance = std::make_unique<SC7A20>(i2c_main, HardwareConfiguration::getAcceleroAddress());
@@ -471,6 +474,14 @@ private:
 					else if(line == "stop") stopConsoleDrive("stop");
 					else if(line == "forget") runFlashJob([]{ forgetBonds(); });
 					else if(line == "voice") printVoice();
+					else if(line.rfind("voice tune ", 0) == 0) runFlashJob([args = line.substr(11)]{ tuneVoice(args); });
+					else if(line == "startline") printStartLine();
+					else if(line.rfind("startline ", 0) == 0) runFlashJob([hex = line.substr(10)]{
+						Personal::setStartLine(hex == "-" ? std::string() : fromHex(hex.c_str(), hex.size()));
+						printStartLine();
+					});
+					else if(line == "chat") printChat();
+					else if(line.rfind("chat set ", 0) == 0) runFlashJob([args = line.substr(9)]{ setChat(args); });
 					else if(line.rfind("voice ", 0) == 0) runFlashJob([name = line.substr(6)]{ setVoice(name.c_str()); });
 					else if(line.rfind("say ", 0) == 0) say(line.substr(4));
 					else if(line == "wifi") runFlashJob([]{ printWifi(); }); // reads NVS strings from flash
@@ -744,7 +755,55 @@ private:
 			if(i) names += ',';
 			names += Voice::Presets[i].name;
 		}
-		printf("[BBVOICE] preset=%s names=%s\n", Voice::current().name, names.c_str());
+		printf("[BBVOICE] preset=%s names=%s pitch=%d speed=%d max=%d\n", Voice::current().name, names.c_str(),
+		       (int) Voice::pitchTune.load(), (int) Voice::speedTune.load(), Voice::MaxTune);
+	}
+
+	/** "voice tune <pitch %> <speed %>" - nudges on top of the preset. */
+	static void tuneVoice(const std::string& args){
+		int p = 0, s = 0;
+		if(sscanf(args.c_str(), "%d %d", &p, &s) != 2 || !Voice::tune(p, s)){
+			printf("[BBVOICE] result=error why=bad_tune\n");
+			return;
+		}
+		printVoice();
+	}
+
+	/*
+	 * Fork: the start-up line and the owner's chat replies (Personalize tab), hex-encoded like the names.
+	 * "startline" / "startline <hex|->" -> [BBSTART] d=<hex|->
+	 * "chat" / "chat set <index> <hex|->" -> [BBCHAT] count=<lines> d=<index>:<hex>,... (only changed ones; "-" if none)
+	 */
+	static void printStartLine(){
+		std::string line;
+		{
+			std::lock_guard<std::mutex> g(Personal::lock);
+			line = Personal::startLine;
+		}
+		printf("[BBSTART] d=%s\n", toHex(line).c_str());
+	}
+
+	static void printChat(){
+		std::string all;
+		for(size_t i = 0; i < ChatLineCount; ++i){
+			const std::string r = Personal::chatReply(i);
+			if(r.empty()) continue;
+			if(!all.empty()) all += ',';
+			all += std::to_string(i) + ":" + toHex(r);
+		}
+		printf("[BBCHAT] count=%u d=%s\n", (unsigned) ChatLineCount, all.empty() ? "-" : all.c_str());
+	}
+
+	static void setChat(const std::string& args){
+		const size_t sp = args.find(' ');
+		const int index = atoi(args.c_str());
+		const std::string hex = sp == std::string::npos ? "-" : args.substr(sp + 1);
+		if(index < 0 || index >= ChatLineCount){
+			printf("[BBCHAT] result=error why=bad_index\n");
+			return;
+		}
+		Personal::setChat((size_t) index, hex == "-" ? std::string() : fromHex(hex.c_str(), hex.size()));
+		printChat();
 	}
 
 	static void setVoice(const char* which){
@@ -1215,6 +1274,14 @@ private:
 		printf("[BBMEM] %-15s internal free %3u KB (largest %3u KB)\n", what,
 		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
 		       (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+	}
+
+	static void speakTextAndWait(Audio* audio, const std::string& text) {
+		if(audio == nullptr || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance || text.empty()){
+			return;
+		}
+		audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text));
+		audio->waitEnd(portMAX_DELAY);
 	}
 
 	static void speakAndWait(Audio* audio, Phrase phrase) {

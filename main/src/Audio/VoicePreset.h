@@ -12,6 +12,7 @@
  * runs in real time on the ESP32-S3), so a preset reshapes that voice: pitch, pitch range (how sing-song it is),
  * speaking speed, plus an optional effect and reverb applied by SpeechAudioGen.
  * The choice is kept in NVS ("bbvoice"/"preset") and set over USB from Dimension Hopper ("voice <name>").
+ * On top of the preset, the owner can nudge pitch and speed (percent, -MaxTune..MaxTune; "voice tune <p> <s>").
  */
 namespace Voice {
 
@@ -42,11 +43,19 @@ inline constexpr uint8_t Count = std::size(Presets);
 inline constexpr float StockStretch = 1.10f;
 
 inline std::atomic<uint8_t> currentIndex{ 0 };
+inline constexpr int MaxTune = 40;
+inline std::atomic<int8_t> pitchTune{ 0 };  // percent: +20 = 20 % higher
+inline std::atomic<int8_t> speedTune{ 0 };  // percent: +20 = 20 % faster
 
 inline const Preset& current(){
 	const uint8_t i = currentIndex.load();
 	return Presets[i < Count ? i : 0];
 }
+
+// The preset with the owner's pitch / speed nudges applied - what the voice actually uses.
+inline float pitch(){ return current().pitch * (1.0f + pitchTune.load() / 100.0f); }
+inline float range(){ return current().range * (1.0f + pitchTune.load() / 100.0f); }
+inline float stretch(){ return current().stretch / (1.0f + speedTune.load() / 100.0f); }
 
 // Name or number -> index, or -1.
 inline int find(const char* nameOrIndex){
@@ -65,6 +74,9 @@ inline void load(){
 	if(nvs_open("bbvoice", NVS_READONLY, &h) != ESP_OK) return;
 	uint8_t v = 0;
 	if(nvs_get_u8(h, "preset", &v) == ESP_OK && v < Count) currentIndex = v;
+	int8_t t = 0;
+	if(nvs_get_i8(h, "pitch", &t) == ESP_OK && t >= -MaxTune && t <= MaxTune) pitchTune = t;
+	if(nvs_get_i8(h, "speed", &t) == ESP_OK && t >= -MaxTune && t <= MaxTune) speedTune = t;
 	nvs_close(h);
 }
 
@@ -76,6 +88,19 @@ inline void set(uint8_t i){
 	nvs_set_u8(h, "preset", i);
 	nvs_commit(h);
 	nvs_close(h);
+}
+
+inline bool tune(int p, int s){
+	if(p < -MaxTune || p > MaxTune || s < -MaxTune || s > MaxTune) return false;
+	pitchTune = static_cast<int8_t>(p);
+	speedTune = static_cast<int8_t>(s);
+	nvs_handle_t h;
+	if(nvs_open("bbvoice", NVS_READWRITE, &h) != ESP_OK) return true;
+	nvs_set_i8(h, "pitch", static_cast<int8_t>(p));
+	nvs_set_i8(h, "speed", static_cast<int8_t>(s));
+	nvs_commit(h);
+	nvs_close(h);
+	return true;
 }
 
 }

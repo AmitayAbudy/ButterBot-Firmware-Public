@@ -52,14 +52,20 @@ Every voice command and the controller's buttons, with pictures.
 ![Personalize tab](../../docs/images/personalize.png)
 
 Make the robot yours:
-- **Voice** - eight presets; click one to switch and hear a sample. Classic is the stock voice.
+- **Voice** - eight presets; click one to switch and hear a sample. Classic is the stock voice. Pitch and speed
+  sliders nudge any preset (±40 %).
 - **Names** - yours (it greets you by name when it recognises your face) and the robot's; both are used by the AI too.
-- **Controller theme** - Main, Rose, Red, Blue, or the fork's Portal, Butter, Ice, Mono and Purple; the controller
-  (plugged in by USB) switches straight away. The new themes need this release's controller firmware.
+- **Start-up line** - what the robot says when it switches on; `{name}` becomes your name.
+- **Controller** - the theme (Main, Rose, Red, Blue, or the fork's Portal, Butter, Ice, Mono and Purple; it switches
+  straight away), screen brightness and sleep time. Needs the controller plugged in by USB and this release's
+  controller firmware.
 - **Your ramble lines** - up to 30 of your own lines, mixed into what the robot mutters when idle.
-- **AI personality** - classic, extra sarcastic, overly dramatic, wholesome, grumpy, or your own description.
+- **Chat replies** - your own answer to any of the 48 chat voice lines; the controller shows it as a subtitle.
+- **AI personality and facts about you** - classic, extra sarcastic, overly dramatic, wholesome, grumpy, or your own
+  description, plus a few facts the AI brings up now and then (birthday, pets…). Kept on the PC.
 
-Voice, names and lines are saved on the robot, so they survive updates.
+Cards that need a board stay greyed out until that board answers. Everything on the robot and controller is saved
+there, so it survives updates.
 
 ### Diagnostics
 The robot and the controller side by side, each with its own port and Connect button (both can be connected at once;

@@ -10,6 +10,7 @@
 #include "Audio/SpeechAudioSource.h"
 #include "Audio/SpeechGen.h"
 #include "Services/Com.h"
+#include "Services/Personal.h"
 
 DEFINE_LOG(ChatRoutine)
 
@@ -28,11 +29,27 @@ Routine::TickingState speakChatLine(uint8_t index){
 		return Routine::TickingState::Done;
 	}
 
-	ChatData chatData{};
-	chatData.id = index;
-	com->sendData(BB::State::Scenario, BB::Action::Scenario::Chat, chatData);
+	// Fork: the owner's own reply (Personalize tab). The controller only knows the stock replies by number, so it
+	// gets this one as a subtitle: the chat line as "heard", the owner's reply as "said".
+	const std::string own = Personal::chatReply(index);
+	if(!own.empty()){
+		SubtitleData subtitle;
+		for(const auto& act : activations){
+			if(act.scenario == BB::Action::Scenario::Chat && act.scenarioData.raw == index){
+				subtitle.heard = act.string;
+				break;
+			}
+		}
+		subtitle.say = own;
+		com->sendData(BB::State::Scenario, BB::Action::Scenario::Subtitle, subtitle);
+	}else{
+		ChatData chatData{};
+		chatData.id = index;
+		com->sendData(BB::State::Scenario, BB::Action::Scenario::Chat, chatData);
+	}
 
-	audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text));
+	audio->play(ServiceLocator::SpeechAudioGenInstance.get(),
+	            std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, own.empty() ? text : own));
 	audio->waitEnd(portMAX_DELAY);
 
 	return Routine::TickingState::Done;

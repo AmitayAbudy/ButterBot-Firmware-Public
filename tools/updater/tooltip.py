@@ -26,7 +26,16 @@ TIPS = {
     "Apply": "Send these settings to the robot (it keeps them).",
     "Save names": "Save your name and the robot's name on the robot (and for the AI on this PC).",
     "Save lines": "Save your ramble lines on the robot (replaces the ones it has).",
-    "Save personality": "Use this personality for AI conversations, from the next question.",
+    "Save personality and facts": "Use this personality and these facts for AI conversations, from the next "
+                                  "question. Kept on this PC.",
+    "Apply & hear": "Save the pitch and speed nudges on the robot and hear a sample line.",
+    "Reset": "Back to the preset's own pitch and speed.",
+    "Apply": "Save the brightness and sleep time on the controller.",
+    "Save line": "Save the start-up line on the robot - it says it the next time it switches on.",
+    "▶ Hear it": "Have the robot say this line now.",
+    "Use the stock line": "Go back to the robot's own start-up line.",
+    "Save reply": "Save your reply to this chat line on the robot.",
+    "Use the stock reply": "Go back to the robot's own reply to this chat line.",
     "About": "Who made Dimension Hopper, its version and where to find the project. Also: reset the tab order.",
     "⟳ Scan": "Find which board is on which USB port (a few seconds). What it finds fills in the port lists in "
               "every tab.",

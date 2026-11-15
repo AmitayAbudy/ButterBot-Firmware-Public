@@ -120,10 +120,9 @@ void SpeechGen::fliteThreadFunc(){
 
 	// Fork: apply the voice preset. Done here, on the flite thread, because flite reads these features while it
 	// synthesizes - changing them from another task mid-sentence would race.
-	const Voice::Preset& preset = Voice::current();
-	feat_set_float(voice->features, "int_f0_target_mean", preset.pitch);
-	feat_set_float(voice->features, "int_f0_target_stddev", preset.range);
-	feat_set_float(voice->features, "duration_stretch", preset.stretch);
+	feat_set_float(voice->features, "int_f0_target_mean", Voice::pitch());
+	feat_set_float(voice->features, "int_f0_target_stddev", Voice::range());
+	feat_set_float(voice->features, "duration_stretch", Voice::stretch());
 
 	switch(fliteInputType){
 		case InputType::Text:
