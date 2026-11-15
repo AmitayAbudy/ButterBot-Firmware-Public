@@ -9,7 +9,6 @@ connected; it reconnects by itself afterwards. USB works next to the hardware co
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 import tkinter as tk
@@ -22,13 +21,15 @@ import controller_link as cl
 import hopper_core as core
 import tooltip
 from stick_widget import Stick
+import screen_render as sr
+from PIL import Image, ImageTk
 
 # drawing units: the same 50 x 92 board as make_art.py's controller icon
 UNIT = 6.6
 W, H = int(50 * UNIT), int(92 * UNIT)
 
 PCB, PCB_EDGE, SILK, GOLD, INK = "#18803c", "#0c4a22", "#e2ece4", "#d6b254", "#0a1e10"
-LIME, SCREEN_BG = "#b6ff3b", "#06100a"
+SCREEN_BG = "#000000"
 
 # button -> (centre in board units, colour, label, label side, key)
 BUTTONS = {
@@ -39,16 +40,8 @@ BUTTONS = {
 }
 STICK_C, STICK_R, KNOB_R = (25, 69), 10, 6.5
 
-HOME_HINTS = ["OVERRIDE: RC NEEDS THE", "  REAL CONTROLLER", "POKE: EXISTENTIAL DREAD", "SHUT UP: MUTE",
-              "SUMMON: TALK, HOLD: COME", "STICK: DRIVE"]
-LISTEN = {0: ["LISTENING...", "RELUCTANTLY"], 1: ["DIDN'T CATCH", "THAT"], 2: ["NEVER MIND"],
-          3: ["HEARD YOU.", "UNFORTUNATELY."], 4: ["CONSULTING", "MY BRAIN..."]}
-
-
-def _words(name: str) -> str:
-    return re.sub(r"(?<=[a-z])(?=[A-Z])|_", " ", name).upper()
-
-
+HOME_HINTS = ["POKE: EXISTENTIAL DREAD", "SHUT UP: MUTE", "SUMMON: TALK, HOLD: COME", "STICK: DRIVE"]
+WINDOW_TIMEOUT_S = 20  # back to the home screen if the robot doesn't say it's done
 def _chat_replies() -> tuple[list[str], list[str]]:
     """Chat lines (what you say, what it answers) in the robot's order, from the bundled guide data."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
@@ -58,19 +51,6 @@ def _chat_replies() -> tuple[list[str], list[str]]:
         return [c["action"] for c in chats], [c.get("reply", "") for c in chats]
     except (OSError, ValueError, KeyError):
         return [], []
-
-
-def _wrap(text: str, width: int = 22) -> list[str]:
-    out, line = [], ""
-    for w in text.upper().split():
-        if len(line) + len(w) + (1 if line else 0) > width:
-            out.append(line)
-            line = w
-        else:
-            line = f"{line} {w}".strip()
-    if line:
-        out.append(line)
-    return out
 
 
 class ControllerTab(tk.Frame):
@@ -186,12 +166,13 @@ class ControllerTab(tk.Frame):
         self.log.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         self.refresh_ports()
-        self._show(["NOT CONNECTED", "", "PICK USB OR", "BLUETOOTH AND", "HIT CONNECT"], title="BUTTERBOT")
+        self._paint()
         root = self.winfo_toplevel()
         root.bind("<KeyPress>", self._key_down, add="+")
         root.bind("<KeyRelease>", self._key_up, add="+")
         self.bind("<Map>", lambda e: self._check_ble())
         self.after(self.DRIVE_EVERY_MS, self._drive_tick)
+        self.after(500, self._screen_tick)
         self._mode_changed(save=False)
 
     # --- small helpers ------------------------------------------------------------------------------------
@@ -241,7 +222,13 @@ class ControllerTab(tk.Frame):
         self._rect(11, 18, 39, 46, fill="#0c0c0e", outline="#2c3034", width=2)
         self.screen = (12.5, 19.5, 37.5, 44.5)
         self._rect(*self.screen, fill=SCREEN_BG, outline="")
-        self.screen_items: list[int] = []
+        x0, y0 = self._u(self.screen[0], self.screen[1])
+        self.screen_px = int((self.screen[2] - self.screen[0]) * UNIT)
+        self.screen_img = self.cv.create_image(x0, y0, anchor="nw")
+        self.screen_photo = None
+        self.window: sr.Screen | None = None
+        self.window_at = 0.0
+        self.muted = False
         # toggle switch
         self._rect(21.5, 48.5, 28.5, 53, fill="#969ca2", outline="#50565c", width=2)
         cv.create_line(*self._u(25, 51), *self._u(26.8, 47.6), fill="#dce0e4", width=4, capstyle="round")
@@ -268,22 +255,41 @@ class ControllerTab(tk.Frame):
         self._rect(21, 87, 29, 90.5, fill="#babec4", outline="#6e747a", width=2)
 
     # --- the screen ---------------------------------------------------------------------------------------
-    def _show(self, lines: list[str], title: str = "BUTTERBOT"):
-        cv = self.cv
-        for i in self.screen_items:
-            cv.delete(i)
-        x0, y0, x1, y1 = self.screen
-        self.screen_items = [self._rect(x0, y0, x1, y0 + 3, fill=LIME, outline="")]
-        self.screen_items.append(cv.create_text(*self._u(x0 + 1, y0 + 1.5), text=title[:24], anchor="w",
-                                                fill=SCREEN_BG, font=("Consolas", 8, "bold")))
-        y = y0 + 5.5
-        for line in lines[:9]:
-            self.screen_items.append(cv.create_text(*self._u((x0 + x1) / 2, y), text=line[:24], fill=LIME,
-                                                    font=("Consolas", 8, "bold")))
-            y += 2.4
+    def _show(self, lines: list[str], title: str = "Butter Bot", icon: str = "", big: str = ""):
+        """Open a window on the screen (drawn like the controller's, see screen_render.py)."""
+        self._window(sr.Screen(title, lines, icon=icon, big=big))
+
+    def _window(self, w: "sr.Screen | None"):
+        self.window = w
+        self.window_at = time.monotonic()
+        self._paint()
 
     def _home(self):
-        self._show(HOME_HINTS)
+        self._window(None)
+
+    def _paint(self):
+        t = time.monotonic() - self.window_at
+        linked = self.link is not None and self.link.connected
+        batt = None if self.battery is None else min(100, self.battery * 100 // 6)
+        hints = (["MUTED", ""] + HOME_HINTS) if self.muted else HOME_HINTS
+        if self.link is None:
+            img = sr.render(sr.Screen("Butter Bot", ["Not connected.", "Pick USB or Bluetooth and hit Connect."]),
+                            hints, None, False, t)
+        else:
+            img = sr.render(self.window, hints, batt, linked, t)
+        # 4x with hard pixels, then down to the drawn screen with smoothing: even pixels at any size
+        img = img.resize((512, 512), Image.NEAREST).resize((self.screen_px, self.screen_px), Image.LANCZOS)
+        self.screen_photo = ImageTk.PhotoImage(img)
+        self.cv.itemconfigure(self.screen_img, image=self.screen_photo)
+
+    def _screen_tick(self):
+        # animate open windows that have an icon; close windows the robot never closed
+        if self.window is not None:
+            if time.monotonic() - self.window_at > WINDOW_TIMEOUT_S:
+                self._home()
+            elif self.window.icon and self._visible():
+                self._paint()
+        self.after(120, self._screen_tick)
 
     # --- connection ---------------------------------------------------------------------------------------
     def refresh_ports(self):
@@ -341,7 +347,7 @@ class ControllerTab(tk.Frame):
             self.link_port = ""
         self.link = None
         tooltip.relabel(self.connect_btn, "Connect")
-        self._show(["NOT CONNECTED"])
+        self._paint()
 
     def toggle(self):
         if self.link is not None:
@@ -400,8 +406,8 @@ class ControllerTab(tk.Frame):
         if key == "shutup":
             self._send(cl.command("ShutUp"))
         elif key == "override":
-            self._show(["RC MODE NEEDS THE", "HARDWARE CONTROLLER", "(IT MAKES THE", "CAMERA HOTSPOT)", "",
-                        "USE THE STICK", "TO DRIVE"], title="OVERRIDE")
+            self._show(["RC mode needs the hardware controller (it makes the camera hotspot).",
+                        "Use the stick to drive."], title="Override")
         elif key == "summon":
             self.after(self.SUMMON_HOLD_MS, lambda t=self.pressed[key]: self._summon_held(t))
 
@@ -409,7 +415,7 @@ class ControllerTab(tk.Frame):
         if self.pressed.get("summon") == t:
             self.pressed["summon"] = -1.0  # handled: the release does nothing
             if self._send(cl.command("Summon")):
-                self._show(["COMING..."], title="SUMMON")
+                self._show(["Coming..."], title="Summon")
 
     def _release(self, key: str):
         t = self.pressed.pop(key, None)
@@ -482,7 +488,7 @@ class ControllerTab(tk.Frame):
 
     def _ask_status(self):
         if self._send(cl.command("Status")):
-            self._show(["ASKING THE ROBOT..."], title="ROBOT STATUS")
+            self._show(["Asking the robot..."], title="Robot Status")
 
     # --- what the robot sends -----------------------------------------------------------------------------
     def _log(self, text: str):
@@ -498,46 +504,29 @@ class ControllerTab(tk.Frame):
         self.cv.itemconfigure(self.led_big, fill="#78ff8c")
         self.after(150, lambda: self.cv.itemconfigure(self.led_big, fill="#2d5a36"))
         d = m.data
-        if m.state == "Listen":
-            lines = LISTEN.get(d[0] if d else 0, ["LISTENING..."])
-            self._show(lines, title="LISTEN")
-            self._log("listen: " + " ".join(lines).lower())
-            return
-        if m.state == "Scenario" and m.action == "Subtitle":
-            s = m.strings() + ["", ""]
-            heard, say = s[0], s[1]
-            self._show((["YOU: " + heard[:18]] if heard else []) + _wrap(say), title="AI")
-            self._log(f"you: {heard}  ·  bot: {say}")
-            return
-        if m.state == "Scenario" and m.action == "Chat":
-            i = d[0] if d else -1
-            reply = self.chat_reply[i] if 0 <= i < len(self.chat_reply) else ""
-            self._show(_wrap(reply) or ["..."], title="CHAT")
-            self._log(f"chat: {reply}")
-            return
         if m.state == "Idle" and m.action == "RobotStatus":
             self._robot_status(d)
             return
-        if m.state == "Idle" and m.action == "None":
-            self._home()
-            return
         if m.state == "Idle" and m.action == "BatteryLevel":
-            self.battery = d[0] if d else None  # sent on connect and when it changes
-            self._log(f"battery level {self.battery}")
+            self.battery = d[0] if d else None  # 0 = critical .. 6 = full; sent on connect and when it changes
+            self._paint()
             return
         if m.state == "Idle" and m.action == "ShutUp":
-            muted = bool(d[:1] == b"")
-            self._show(["MUTED"] if muted else HOME_HINTS, title="SHUT UP" if muted else "BUTTERBOT")
-            self._log("muted" if muted else "not muted")
+            self.muted = d[:1] == bytes([1])
+            self._log("muted" if self.muted else "not muted")
+            self._paint()
             return
         if m.state == "Idle" and m.action == "CantMove":
-            why = "CHARGING" if (d[:1] == b"\x00") else "NOT STABLE"
-            self._show(["CAN'T MOVE:", why], title="NOPE")
-            self._log(f"can't move ({why.lower()})")
+            why = "I'm charging." if d[:1] == bytes([0]) else "I'm not standing steady."
+            self._show(["Can't move.", why], title="Can't Move", icon="fall")
+            self._log("can't move: " + why.lower())
             return
-        title = _words(m.action) if m.action not in ("None",) else m.state.upper()
-        self._show([title], title=m.state.upper())
-        self._log(f"{m.state.lower()}: {title.lower()}")
+        w = sr.screen_for(m.state, m.action, d, self.chat_reply)
+        self._window(w)
+        if w is None:
+            return
+        text = " / ".join(x for x in ([w.big] if w.big else []) + w.lines if x)
+        self._log(f"{w.title.lower()}: {text}" if text else w.title.lower())
 
     def _robot_status(self, d: bytes):
         if len(d) < 9:
@@ -546,11 +535,11 @@ class ControllerTab(tk.Frame):
         m = cl.Message("Idle", "RobotStatus", d[9:])
         fw, network, problem, heard, said = (m.strings() + [""] * 5)[:5]
         up = up_lo | up_hi << 8
-        lines = [f"BATTERY {batt}%" + (" CHG" if charge == 1 else (" FULL" if charge == 2 else "")),
-                 f"MEMORY {ram} KB (LOW {ram_min})",
-                 "WIFI " + ((network or "SET UP").upper()[:16] if wifi else "NOT SET UP"),
-                 "AI " + ("ON" if ai else "OFF"),
-                 f"AWAKE {up // 60}H {up % 60}M" if up >= 60 else f"AWAKE {up}M",
-                 fw.upper()[:22]]
-        self._show(lines, title="ROBOT STATUS")
-        self._log("status: " + ", ".join(line.lower() for line in lines))
+        lines = [f"Battery {batt}%" + (", charging" if charge == 1 else (", full" if charge == 2 else "")),
+                 f"Memory {ram} KB (low {ram_min})",
+                 "WiFi: " + ((network or "set up") if wifi else "not set up"),
+                 "AI mode " + ("on" if ai else "off"),
+                 f"Awake {up // 60}h {up % 60}m" if up >= 60 else f"Awake {up}m",
+                 fw]
+        self._window(sr.Screen("Robot Status", lines, width=110))
+        self._log("status: " + ", ".join(lines))

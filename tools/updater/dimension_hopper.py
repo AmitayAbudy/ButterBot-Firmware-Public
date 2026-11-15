@@ -1282,6 +1282,8 @@ def _selftest(out: str):
         lines.append(f"ai: MISSING {e!r}")
     import controller_link
     lines.append(f"bluetooth: {controller_link.bluetooth_available()}")
+    import screen_render
+    lines.append(f"controller screen: {len(screen_render.GLYPHS)} glyphs, {len(screen_render.DATA['phrases'])} text lists")
     try:  # Update both runs flashes in worker processes (this exe again, with --flash-worker)
         core.run_in_worker("backup", dict(port="COM250", flash_bytes=4 * core.MiB, target="ctrl", baud=921600))
     except Exception as e:  # noqa: BLE001 - an error about COM250 means the worker ran

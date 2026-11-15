@@ -65,8 +65,8 @@ the ports are filled in from the Flash tab after a scan):
 
 ### Controller
 A stand-in for the hardware controller, drawn like it: the same four buttons in the same places (click them, or Q/E/Z/C),
-a stick you drag (or WASD / arrows) that drives the robot, a screen showing what the robot sends its controller
-(listening, subtitles, chat replies, status...), the controller's whole action menu, and a **Robot status** button.
+a stick you drag (or WASD / arrows) that drives the robot, a screen drawn like the real controller's (its pixel font, windows and texts, with our
+own icons and animations) showing what the robot sends, the controller's whole action menu, and a **Robot status** button.
 
 - **USB:** the robot plugged into this PC. Works next to the hardware controller.
 - **Bluetooth:** wireless, like the real controller (greyed out, with the reason, if this PC has no Bluetooth).
@@ -159,6 +159,8 @@ Dev flags: `--selftest <out.txt>` checks the bundled esptool, stubs and AI libra
 | `guide_tab.py`, `personalize_tab.py`, `diag_tab.py`, `controller_tab.py`, `console_tab.py`, `ai_tab.py` | The tabs. |
 | `controller_link.py` | The emulated controller's link to the robot: the message format, over USB or Bluetooth (bleak). |
 | `stick_widget.py` | The joystick used by the Controller and Diagnostics tabs. |
+| `screen_render.py` | Draws the Controller tab's screen like the real controller's (its font, windows and texts). |
+| `gen_screen_data.py` | Makes `screen_data.json` (font, window titles, texts) from the controller firmware sources; run by hand when they change. |
 | `brain.py` | The AI brain: Whisper, Ollama, the robot protocol and server, persona and timings. |
 | `tooltip.py` | Hover help for every button. |
 | `build_exe.ps1` | Reproducible PyInstaller build. |
