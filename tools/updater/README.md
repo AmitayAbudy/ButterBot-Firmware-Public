@@ -16,7 +16,8 @@ The bar under the title shows which USB port the **ButterBot** and the **Control
 a port yourself. The big header shows on the Flash tab only; the other tabs get a slim one.
 
 On the right of the bar, the robot at a glance: battery, controller link and how much of its settings storage is free
-(🔋 87%  🎮 linked  💾 75% free; hover for the details and the firmware version). It refreshes every 20 seconds while
+(*Robot: Battery 87% · Controller linked · Storage 75% free*; hover for the details and the firmware
+version). It refreshes every 20 seconds while
 nothing else is using the port, and turns amber when the battery is low or the storage is nearly full.
 
 Drag a tab left or right to reorder the tabs; the order is remembered (**About** → *Reset tab order* puts it back).

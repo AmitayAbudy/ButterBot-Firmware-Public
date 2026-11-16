@@ -555,7 +555,7 @@ class App:
         self.bar_note.pack(side="left", padx=10)
         self.scan_labels.append(self.bar_note)
         # The robot at a glance: battery, firmware, controller link, settings storage (refreshed every 20 s)
-        self.bot_info = tk.Label(self.board_bar, text="", bg=PANEL, fg=DIM, font=("Segoe UI", 9))
+        self.bot_info = tk.Label(self.board_bar, text="", bg=PANEL, fg=DIM, font=("Segoe UI Semibold", 10))
         self.bot_info.pack(side="right", padx=10)
         self.bot_info_tip = tooltip.Tooltip(self.bot_info, "")
         self._info_polling = False
@@ -1019,12 +1019,12 @@ class App:
             batt = -1
         charge = f.get("charge", "")
         if batt >= 0:
-            bits.append(f"🔋 {batt}%" + (" ⚡" if charge == "charging" else ""))
+            bits.append(f"Battery {batt}%" + (" (charging)" if charge == "charging" else ""))
             tip.append(f"Battery {batt}% ({charge or 'unknown'})")
             warn |= batt < 20 and charge != "charging"
         link = f.get("link", "")
         if link:
-            bits.append("🎮 linked" if link == "connected" else "🎮 not linked")
+            bits.append("Controller linked" if link == "connected" else "Controller not linked")
             tip.append("Controller " + ("connected" if link == "connected" else "not connected"))
         free = []
         for key, what in (("nvs", "Personalize, WiFi, pairing"), ("user", "routines, commands, schedules")):
@@ -1035,14 +1035,14 @@ class App:
                 tip.append(f"Storage for {what}: {pct}% free ({(st[1] - st[0]) * 32 // 1024} of "
                            f"{st[1] * 32 // 1024} KB)")
         if free:
-            bits.append(f"💾 {min(free)}% free")
+            bits.append(f"Storage {min(free)}% free")
             warn |= min(free) < 15
         fw = f.get("fw", "")
         if fw:
             tip.append(f"Firmware {fw}")
         if not free and fw:
             tip.append("Update the robot's firmware to see its storage here.")
-        self.bot_info.configure(text="   ".join(bits), fg=WARN if warn else DIM)
+        self.bot_info.configure(text="Robot:  " + "   ·   ".join(bits), fg=WARN if warn else GREEN)
         self.bot_info_tip.set("\n".join(tip))
 
     def _board_picked(self, kind: str):
