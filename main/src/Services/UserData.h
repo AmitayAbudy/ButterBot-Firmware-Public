@@ -257,8 +257,10 @@ inline bool saveCommands(){
 /** Adds or replaces command `index` (index == size: a new one). */
 inline bool setCommand(size_t index, uint8_t routine, const std::string& phrase, const std::string& phonemes){
 	if(routine >= MaxRoutines || phrase.empty() || phrase.size() > MaxPhrase || phonemes.empty() || phonemes.size() > MaxPhonemes) return false;
+	// Only the phonemes the English MultiNet model knows (what Dimension Hopper's dictionary uses)
+	static constexpr const char* Known = "BDFGKLMNPRSTVWYZabcdefghijklmnopqrstuvw ";
 	for(char c : phonemes){
-		if(!isalpha((unsigned char) c) && c != ' ') return false;
+		if(c == '\0' || strchr(Known, c) == nullptr) return false;
 	}
 	{
 		std::lock_guard<std::mutex> g(lock);

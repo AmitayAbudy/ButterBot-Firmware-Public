@@ -453,7 +453,12 @@ void AudioFrontend::setSpeechPhrases(std::span<Phrase> phrases){
 	}
 
 	for(size_t i = 1; i <= phrases.size(); ++i){
-		ESP_ERROR_CHECK(esp_mn_commands_phoneme_add((int)i + AbortPhrasesNum, phrases[i-1].string, phrases[i-1].phonemes));
+		// Fork: a phrase MultiNet refuses (e.g. phonemes it doesn't know) is skipped, not fatal - one bad voice command
+		// used to abort the robot every time it listened. Its id stays unused, so the others keep their indexes.
+		const esp_err_t addErr = esp_mn_commands_phoneme_add((int)i + AbortPhrasesNum, phrases[i-1].string, phrases[i-1].phonemes);
+		if(addErr != ESP_OK){
+			printf("[BBVOICECMD] result=skipped phrase=%s why=%s\n", phrases[i-1].string, esp_err_to_name(addErr));
+		}
 
 		// Periodically yield so this loop doesn't saturate the flash bus
 		if((i % 8) == 0){
