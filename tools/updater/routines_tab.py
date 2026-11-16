@@ -27,11 +27,11 @@ MAX_STEPS = 30
 MAX_TEXT = 1500
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")   # shown Monday first
 DAY_BIT = {"Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6}   # the robot's bits (tm_wday)
-KINDS = (("S", "Say a line"), ("A", "Built-in action"), ("M", "Drive"), ("W", "Wait"), ("D", "Dance"),
-         ("L", "LED module"))
+KINDS = (("S", "💬 Say a line"), ("A", "⭐ Built-in action"), ("M", "🚗 Drive"), ("W", "⏳ Wait"), ("D", "💃 Dance"),
+         ("L", "💡 LED module"))
 # "A" steps: the robot's own actions a routine can run (the firmware's UserData::BuiltinActions)
-ACTIONS = (("time", "Tell the time"), ("joke", "Tell a joke"), ("fact", "Tell a fact"), ("butter", "Pass the butter"),
-           ("portal", "Open a portal"))
+ACTIONS = (("time", "🕒 Tell the time"), ("joke", "😂 Tell a joke"), ("fact", "🧠 Tell a fact"),
+           ("butter", "🧈 Pass the butter"), ("portal", "🌀 Open a portal"))
 DIRECTIONS = (("forward", 1, 1), ("backward", -1, -1), ("turn left", 0.35, 1), ("turn right", 1, 0.35),
               ("spin left", -1, 1), ("spin right", 1, -1))
 LED_MODES = ("on", "off", "strobe", "breathe")
@@ -78,6 +78,13 @@ def direction_of(l: int, r: int) -> tuple[str, int] | None:
 
 
 def describe(s: tuple) -> str:
+    """One step as a line for the step list, with its kind's icon (an action has its own)."""
+    text = _describe(s)
+    icon = "" if s[0] == "A" else next((n.split(" ", 1)[0] for k, n in KINDS if k == s[0]), "")
+    return f"{icon} {text}" if icon else text
+
+
+def _describe(s: tuple) -> str:
     if s[0] == "S":
         return f'Say "{s[1]}"'
     if s[0] == "M":
@@ -330,8 +337,11 @@ class RoutinesTab(tk.Frame):
 
     def _cmd(self, cmds: list[tuple[str, str]], done, status: tk.Label | None = None):
         """Runs console commands in order on a worker thread; done(list of replies) on the UI thread."""
+        if self.working:  # still reading or saving: run this once that's done instead of dropping it
+            self.after(300, lambda: self._cmd(cmds, done, status))
+            return
         port = self._port()
-        if not port or self.working:
+        if not port:
             return
         self.working = True
 
@@ -442,7 +452,7 @@ class RoutinesTab(tk.Frame):
         se = tk.Frame(ed, bg=p["PANEL"])
         se.pack(fill="x", pady=(6, 0))
         self.kind_var = tk.StringVar(value=KINDS[0][1])
-        kb = self._combo(se, self.kind_var, [k[1] for k in KINDS], 12)
+        kb = self._combo(se, self.kind_var, [k[1] for k in KINDS], 16)
         kb.pack(side="left")
         kb.bind("<<ComboboxSelected>>", lambda e: self._kind_changed())
         self.param = tk.Frame(se, bg=p["PANEL"])
@@ -490,7 +500,7 @@ class RoutinesTab(tk.Frame):
             self._combo(self.param, self.led_var, LED_MODES, 9).pack(side="left")
             self._label(self.param, "(needs the LED add-on module)").pack(side="left", padx=6)
         elif k == "A":
-            self._combo(self.param, self.action_var, [a[1] for a in ACTIONS], 16).pack(side="left")
+            self._combo(self.param, self.action_var, [a[1] for a in ACTIONS], 19).pack(side="left")
             self._label(self.param, "(needs the newest robot firmware)").pack(side="left", padx=6)
         if not self.robot_ok:
             self._gate(self.rout_card, False)
@@ -652,6 +662,8 @@ class RoutinesTab(tk.Frame):
             last = r[-1] if r else None
             if not last or last.get("result") != "saved":
                 why = (last or {}).get("why", "no answer")
+                if why == "space":
+                    why = "its settings storage is full - shorten or delete a routine"
                 self.rout_lbl.configure(text=f"The robot didn't save it ({why}).", fg=self.pal["WARN"])
                 return
             self.routines[i] = text

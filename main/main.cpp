@@ -137,6 +137,7 @@ protected:
 			ret = nvs_flash_init();
 		}
 		ESP_ERROR_CHECK(ret);
+		UserData::initStorage(); // fork: the "userdata" NVS partition (routines etc.), moved there from the main one
 		Voice::load(); // fork: the chosen voice preset, before anything speaks
 		Personal::load(); // fork: owner / robot names and the owner's ramble lines
 		UserData::load(); // fork: the owner's routines, voice commands, schedules and quiet hours
@@ -417,7 +418,9 @@ private:
 	 * Fork: one status line on the USB serial console every StatusIntervalMs, e.g.
 	 *   [BBSTAT] dev=bot fw=v1.1.1-exadon.2 batt=73 charge=unplugged link=connected up=1234
 	 * Dimension Hopper's "Check status" listens for it (without resetting the board) to show battery,
-	 * charging and controller link. printf bypasses the log level, so it always appears.
+	 * charging and controller link. printf bypasses the log level, so it always appears. Also: RAM, reset reason,
+	 * boots, and settings storage ("nvs=" main NVS, "user=" routines etc., in 32-byte entries used/total).
+	 * "stat" on the console prints one right away (Dimension Hopper's status strip).
 	 */
 	static constexpr uint64_t StatusIntervalMs = 5000;
 
@@ -474,6 +477,7 @@ private:
 						printf("[BBEMU] mirror=%d\n", Com::mirrorToConsole ? 1 : 0);
 					}
 					else if(line.rfind("ctrl ", 0) == 0) consoleCtrl(line.c_str() + 5);
+					else if(line == "stat") nextStatus = 0; // fork: the status line now (Dimension Hopper's status strip)
 					else if(line == "names") printNames();
 					else if(line.rfind("names ", 0) == 0) runFlashJob([args = line.substr(6)]{ setNames(args); });
 					else if(line == "ramble") printRambles();
@@ -599,7 +603,13 @@ private:
 				case ChargingState::Full: charge = "full"; break;
 			}
 		}
-		printf("[BBSTAT] dev=bot fw=%s batt=%d charge=%s link=%s up=%llu ram=%u ram_min=%u alloc_fail=%lu reset=%s boots=%lu\n",
+		// Settings storage in 32-byte entries, used/total: "nvs" = the main NVS (Personalize, WiFi, Bluetooth, IR),
+		// "user" = routines, commands and schedules (the same partition as nvs on robots without the "userdata" one)
+		size_t nu = 0, nt = 0, uu = 0, ut = 0;
+		UserData::usage(NVS_DEFAULT_PART_NAME, nu, nt);
+		if(UserData::ownPart) UserData::usage(UserData::Part, uu, ut);
+		printf("[BBSTAT] dev=bot fw=%s batt=%d charge=%s link=%s up=%llu ram=%u ram_min=%u alloc_fail=%lu reset=%s boots=%lu "
+		       "nvs=%u/%u user=%u/%u\n",
 		       esp_app_get_description()->version,
 		       battery != nullptr ? static_cast<int>(battery->getPerc() + 0.5f) : -1,
 		       charge,
@@ -608,7 +618,7 @@ private:
 		       // internal RAM in KB (now / lowest seen since boot): Bluetooth aborts the robot if this runs out
 		       (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
 		       (unsigned) MemMark::lowestKb(), (unsigned long) MemMark::failedAllocs.load(),
-		       resetReasonName(), (unsigned long) bootCount);
+		       resetReasonName(), (unsigned long) bootCount, (unsigned) nu, (unsigned) nt, (unsigned) uu, (unsigned) ut);
 	}
 
 	/*
@@ -925,8 +935,8 @@ private:
 				return;
 			}
 			runFlashJob([index, steps, text = std::move(text)]{
-				UserData::setRoutine((size_t) index, text);
-				printf("[BBROUT] result=saved i=%d steps=%d\n", index, steps);
+				if(UserData::setRoutine((size_t) index, text)) printf("[BBROUT] result=saved i=%d steps=%d\n", index, steps);
+				else printf("[BBROUT] result=error why=space\n");
 			});
 		}else{
 			printf("[BBROUT] result=error why=usage\n");
@@ -994,8 +1004,7 @@ private:
 		}else if(sscanf(args.c_str(), "sched del %u", &i) == 1){
 			ok = UserData::deleteSchedule(i);
 		}else if(sscanf(args.c_str(), "quiet %u %u %u", &on, &start, &end) == 3 && start < 24 * 60 && end < 24 * 60){
-			UserData::setQuiet(on != 0, (uint16_t) start, (uint16_t) end);
-			ok = true;
+			ok = UserData::setQuiet(on != 0, (uint16_t) start, (uint16_t) end);
 		}
 		if(!ok) printf("[BBSCHED] result=error\n");
 		printSchedules();

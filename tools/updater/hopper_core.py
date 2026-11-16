@@ -635,6 +635,24 @@ def _cut(regions: list[tuple[int, bytes]], start: int, end: int) -> list[tuple[i
     return out
 
 
+def nvs_to_keep(chip: list[Partition], image: Optional[list[Partition]]) -> tuple[list[Partition], list[Partition]]:
+    """
+    Which of the image's NVS partitions (Bluetooth bonds, settings) to leave alone on the chip, and which ones get
+    reset. Kept: one the chip has at the same place and size, and a new one in a spot the chip never used for
+    anything (a layout that only adds a partition, like the robot's "userdata" at the end of the flash). Reset: one
+    that moved or grew, since its old contents would be read from the wrong place.
+    """
+    if image is None:                       # no table in the image: the chip's layout stays
+        image = chip
+    is_nvs = lambda p: p.type == 0x01 and p.subtype in NVS_SUBTYPES  # noqa: E731
+    keep, lost = [], []
+    for p in filter(is_nvs, image):
+        same = any(is_nvs(c) and c.offset == p.offset and c.size == p.size for c in chip)
+        clash = any(c.offset < p.offset + p.size and p.offset < c.offset + c.size for c in chip)
+        (keep if same or not clash else lost).append(p)
+    return keep, lost
+
+
 @dataclass
 class WriteStats:
     total: int = 0          # bytes in the image (after leaving NVS out)
@@ -668,14 +686,13 @@ def smart_write(port: str, plan: FlashPlan, baud: int, flash_bytes: int, keep_pa
             if keep_pairing:
                 img_table = _image_table(regions)
                 chip_table = esp.read_flash(PART_TABLE_OFFSET, 0xC00)
-                img_parts = parse_partitions(img_table) if img_table else parse_partitions(chip_table)
-                if img_table is None or img_table[:len(chip_table)] == chip_table:
-                    for p in img_parts:
-                        if p.type == 0x01 and p.subtype in NVS_SUBTYPES:
-                            regions = _cut(regions, p.offset, p.offset + p.size)
-                    stats.kept_nvs = True
-                else:
-                    stats.note = "partition layout changed, so pairing and settings are reset this time"
+                keep, lost = nvs_to_keep(parse_partitions(chip_table),
+                                         parse_partitions(img_table) if img_table else None)
+                for p in keep:
+                    regions = _cut(regions, p.offset, p.offset + p.size)
+                stats.kept_nvs = bool(keep) and not lost
+                if lost:
+                    stats.note = "partition layout moved the settings, so pairing and settings are reset this time"
 
             chunks = []
             for off, data in regions:

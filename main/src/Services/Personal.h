@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstdio>
 #include <nvs.h>
+#include <esp_err.h>
 #include <esp_random.h>
 
 /**
@@ -70,8 +71,9 @@ inline void load(){
 inline void saveKey(const char* key, const std::string& value){
 	nvs_handle_t h;
 	if(nvs_open("bbpers", NVS_READWRITE, &h) != ESP_OK) return;
+	const esp_err_t err = value.empty() ? ESP_OK : nvs_set_str(h, key, value.c_str());
 	if(value.empty()) nvs_erase_key(h, key);
-	else nvs_set_str(h, key, value.c_str());
+	if(err != ESP_OK) printf("[BBNVS] result=error key=%s why=%s\n", key, esp_err_to_name(err));
 	nvs_commit(h);
 	nvs_close(h);
 }
@@ -115,9 +117,10 @@ inline std::string chatReply(size_t index){
 	return chatReplies[index];
 }
 
-inline void save(){
+/** Saves names and ramble lines. False if the flash refused them (a [BBNVS] line says why). */
+inline bool save(){
 	nvs_handle_t h;
-	if(nvs_open("bbpers", NVS_READWRITE, &h) != ESP_OK) return;
+	if(nvs_open("bbpers", NVS_READWRITE, &h) != ESP_OK) return false;
 	std::string all;
 	{
 		std::lock_guard<std::mutex> g(lock);
@@ -128,9 +131,11 @@ inline void save(){
 			all += '\n';
 		}
 	}
-	nvs_set_str(h, "lines", all.c_str());
-	nvs_commit(h);
+	const esp_err_t err = nvs_set_str(h, "lines", all.c_str());
+	if(err != ESP_OK) printf("[BBNVS] result=error key=lines why=%s\n", esp_err_to_name(err));
+	const bool ok = err == ESP_OK && nvs_commit(h) == ESP_OK;
 	nvs_close(h);
+	return ok;
 }
 
 inline void setNames(const std::string& owner, const std::string& robot){
@@ -148,8 +153,7 @@ inline bool addLine(const std::string& line){
 		if(line.empty() || lines.size() >= MaxLines) return false;
 		lines.emplace_back(line.substr(0, MaxLine));
 	}
-	save();
-	return true;
+	return save();
 }
 
 inline void clearLines(){

@@ -15,6 +15,10 @@ The bar under the title shows which USB port the **ButterBot** and the **Control
 **⟳ Scan** there finds them (it listens for their status line first and only probes boards that stay silent), or pick
 a port yourself. The big header shows on the Flash tab only; the other tabs get a slim one.
 
+On the right of the bar, the robot at a glance: battery, controller link and how much of its settings storage is free
+(🔋 87%  🎮 linked  💾 75% free; hover for the details and the firmware version). It refreshes every 20 seconds while
+nothing else is using the port, and turns amber when the battery is low or the storage is nearly full.
+
 Drag a tab left or right to reorder the tabs; the order is remembered (**About** → *Reset tab order* puts it back).
 **About** (top right) shows the version, the author and the project links.
 
@@ -42,7 +46,12 @@ have to be updated by hand once.
   - *idf.py build folder*: everything a build produced. **Use this fork's build** picks it in one click.
 - **Only write what changed** (on by default): compares the board with the image in 64 KB pieces and skips what's
   already there - a typical firmware update takes about a minute.
-- **Keep pairing & settings** (on by default): pairing, voice, WiFi and AI settings survive the update.
+- **Keep pairing & settings** (on by default): pairing, voice, WiFi, AI settings, routines and everything from the
+  Personalize tab survive the update - also when a new release only adds a partition (like 1.1.1-exadon.6's storage
+  for routines).
+- **Saves your settings first**: before flashing a board that runs this fork's firmware, its settings (names, lines,
+  routines, commands, the controller's theme...) go to `%LOCALAPPDATA%\DimensionHopper\auto-backups` (the last 10 per
+  board). If the board comes back without them, Dimension Hopper offers to put them back.
 - **Refuses foot-guns**: partial images, a robot image on the controller (or the other way round), images bigger than
   the chip.
 - **Backs up first** (optional) to `%LOCALAPPDATA%\DimensionHopper\backups`, **verifies** every region after writing,
@@ -87,6 +96,8 @@ Cards that need a board stay greyed out until that board answers (one notice at 
 robot and controller is saved there, so it survives updates.
 
 ### Routines
+
+![Routines tab](../../docs/images/routines.png)
 
 Your own routines, voice commands and schedules - saved on the robot, so they work without the PC.
 - **My routines** - up to 12, each up to 30 steps: *Say a line*, *Built-in action* (tell the time, a joke or a fact,

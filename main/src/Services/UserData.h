@@ -11,9 +11,14 @@
 #include <string>
 #include <vector>
 #include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_err.h>
 
 /**
- * Fork: what the owner builds in Dimension Hopper's Routines tab, kept on the robot (NVS "bbuser"):
+ * Fork: what the owner builds in Dimension Hopper's Routines tab, kept on the robot (NVS namespace "bbuser"). It lives in
+ * its own 28 KB NVS partition "userdata" at the end of the flash: the main 24 KB one also holds Bluetooth, WiFi, IR codes
+ * and the Personalize settings, and a full set of routines doesn't fit next to them. Robots flashed before the partition
+ * existed keep using the main one until a full image adds it; then initStorage() moves the namespace across.
  *   routines       - named lists of steps (say a line, drive, wait, LED module, dance), keys "r<i>"
  *   voice commands - a phrase (text + MultiNet phonemes) that runs a routine, key "cmds"
  *   schedules      - days + time of day that run a routine, key "sched"
@@ -61,6 +66,14 @@ inline bool quietOn = false;
 inline uint16_t quietStart = 22 * 60, quietEnd = 7 * 60;
 inline std::atomic<int> runRequest{ -1 };   // a routine to start as soon as the robot is idle (console "rout run")
 
+inline constexpr const char* Part = "userdata";
+inline constexpr const char* Ns = "bbuser";
+inline bool ownPart = false;   // the "userdata" partition is there (else the main NVS)
+
+inline esp_err_t openNs(nvs_open_mode_t mode, nvs_handle_t* h){
+	return nvs_open_from_partition(ownPart ? Part : NVS_DEFAULT_PART_NAME, Ns, mode, h);
+}
+
 inline std::string readStr(nvs_handle_t h, const char* key){
 	size_t len = 0;
 	if(nvs_get_str(h, key, nullptr, &len) != ESP_OK || len == 0) return {};
@@ -70,13 +83,75 @@ inline std::string readStr(nvs_handle_t h, const char* key){
 	return s;
 }
 
-inline void saveKey(const char* key, const std::string& value){
+/** Saves one string key (empty = erased). False (and a [BBNVS] line) if the flash refused it, e.g. when it's full. */
+inline bool saveKey(const char* key, const std::string& value){
 	nvs_handle_t h;
-	if(nvs_open("bbuser", NVS_READWRITE, &h) != ESP_OK) return;
-	if(value.empty()) nvs_erase_key(h, key);
-	else nvs_set_str(h, key, value.c_str());
-	nvs_commit(h);
-	nvs_close(h);
+	esp_err_t err = openNs(NVS_READWRITE, &h);
+	if(err == ESP_OK){
+		if(value.empty()){
+			err = nvs_erase_key(h, key);
+			if(err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+		}else{
+			err = nvs_set_str(h, key, value.c_str());
+		}
+		if(err == ESP_OK) err = nvs_commit(h);
+		nvs_close(h);
+	}
+	if(err != ESP_OK) printf("[BBNVS] result=error key=%s why=%s\n", key, esp_err_to_name(err));
+	return err == ESP_OK;
+}
+
+/** Keys this namespace uses (for moving it between partitions). */
+inline std::vector<std::string> allKeys(){
+	std::vector<std::string> keys = { "cmds", "sched", "quiet" };
+	for(size_t i = 0; i < MaxRoutines; ++i) keys.push_back("r" + std::to_string(i));
+	return keys;
+}
+
+/**
+ * Mounts the "userdata" partition (call once, after nvs_flash_init) and moves an older robot's routines, commands and
+ * schedules into it from the main NVS. The old copy is only erased once every key was written.
+ */
+inline void initStorage(){
+	esp_err_t err = nvs_flash_init_partition(Part);
+	if(err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND){
+		nvs_flash_erase_partition(Part);   // only ever this partition, never Bluetooth / WiFi / Personalize
+		err = nvs_flash_init_partition(Part);
+	}
+	ownPart = err == ESP_OK;
+	if(!ownPart) return;   // no such partition (flashed app-only onto the old layout): stay in the main NVS
+
+	nvs_handle_t from;
+	if(nvs_open(Ns, NVS_READWRITE, &from) != ESP_OK) return;   // nothing in the main NVS
+	nvs_handle_t to;
+	if(nvs_open_from_partition(Part, Ns, NVS_READWRITE, &to) != ESP_OK){
+		nvs_close(from);
+		return;
+	}
+	bool ok = true;
+	int moved = 0;
+	for(const auto& key : allKeys()){
+		const std::string v = readStr(from, key.c_str());
+		if(v.empty()) continue;
+		if(nvs_set_str(to, key.c_str(), v.c_str()) != ESP_OK) ok = false;
+		else ++moved;
+	}
+	if(ok && nvs_commit(to) == ESP_OK){
+		nvs_erase_all(from);
+		nvs_commit(from);
+		if(moved > 0) printf("[BBNVS] result=moved keys=%d\n", moved);
+	}
+	nvs_close(to);
+	nvs_close(from);
+}
+
+/** NVS use in 32-byte entries: used, and used + what can still be written. False if it couldn't be read. */
+inline bool usage(const char* part, size_t& used, size_t& total){
+	nvs_stats_t st{};
+	if(nvs_get_stats(part, &st) != ESP_OK) return false;
+	used = st.used_entries;
+	total = st.used_entries + st.available_entries;
+	return true;
 }
 
 /** Calls fn(line) for every non-empty line of s. */
@@ -151,15 +226,15 @@ inline bool hasMoves(size_t i){
 	return t.find("\nM ") != std::string::npos || t.find("\nD ") != std::string::npos;
 }
 
-inline void setRoutine(size_t i, const std::string& text){
-	if(i >= MaxRoutines) return;
+inline bool setRoutine(size_t i, const std::string& text){
+	if(i >= MaxRoutines) return false;
 	{
 		std::lock_guard<std::mutex> g(lock);
 		routines[i] = text;
 	}
 	char key[6];
 	snprintf(key, sizeof(key), "r%u", (unsigned) i);
-	saveKey(key, text);
+	return saveKey(key, text);
 }
 
 inline std::string commandsText(){
@@ -170,13 +245,13 @@ inline std::string commandsText(){
 	return s;
 }
 
-inline void saveCommands(){
+inline bool saveCommands(){
 	std::string s;
 	{
 		std::lock_guard<std::mutex> g(lock);
 		s = commandsText();
 	}
-	saveKey("cmds", s);
+	return saveKey("cmds", s);
 }
 
 /** Adds or replaces command `index` (index == size: a new one). */
@@ -191,8 +266,7 @@ inline bool setCommand(size_t index, uint8_t routine, const std::string& phrase,
 		if(index == commands.size()) commands.emplace_back();
 		commands[index] = { phrase, phonemes, routine };
 	}
-	saveCommands();
-	return true;
+	return saveCommands();
 }
 
 inline bool deleteCommand(size_t index){
@@ -201,8 +275,7 @@ inline bool deleteCommand(size_t index){
 		if(index >= commands.size()) return false;
 		commands.erase(commands.begin() + (long) index);
 	}
-	saveCommands();
-	return true;
+	return saveCommands();
 }
 
 /** The routine for a command phrase (the AI brain answers with the phrase), or -1. */
@@ -225,7 +298,7 @@ inline std::string schedulesText(){
 	return s;
 }
 
-inline void saveSchedules(){
+inline bool saveSchedules(){
 	std::string s;
 	char q[24];
 	{
@@ -233,8 +306,8 @@ inline void saveSchedules(){
 		s = schedulesText();
 		snprintf(q, sizeof(q), "%u %u %u", quietOn ? 1u : 0u, (unsigned) quietStart, (unsigned) quietEnd);
 	}
-	saveKey("sched", s);
-	saveKey("quiet", q);
+	const bool a = saveKey("sched", s);
+	return saveKey("quiet", q) && a;
 }
 
 /** Packs the used schedules to the front (after a delete, so their indexes are 0..n-1). */
@@ -255,8 +328,7 @@ inline bool setSchedule(size_t index, uint8_t days, uint16_t minute, uint8_t rou
 		if(index > used) return false;
 		schedules[index] = { true, on, (uint8_t) (days & 0x7f), minute, routine, -1 };
 	}
-	saveSchedules();
-	return true;
+	return saveSchedules();
 }
 
 inline bool deleteSchedule(size_t index){
@@ -266,18 +338,17 @@ inline bool deleteSchedule(size_t index){
 		schedules[index] = {};
 		packSchedules();
 	}
-	saveSchedules();
-	return true;
+	return saveSchedules();
 }
 
-inline void setQuiet(bool on, uint16_t start, uint16_t end){
+inline bool setQuiet(bool on, uint16_t start, uint16_t end){
 	{
 		std::lock_guard<std::mutex> g(lock);
 		quietOn = on;
 		quietStart = start % (24 * 60);
 		quietEnd = end % (24 * 60);
 	}
-	saveSchedules();
+	return saveSchedules();
 }
 
 /** True inside the quiet-hours window (it may cross midnight). */
@@ -307,7 +378,7 @@ inline int dueSchedule(const tm& now){
 
 inline void load(){
 	nvs_handle_t h;
-	if(nvs_open("bbuser", NVS_READONLY, &h) != ESP_OK) return;
+	if(openNs(NVS_READONLY, &h) != ESP_OK) return;
 	std::lock_guard<std::mutex> g(lock);
 	for(size_t i = 0; i < MaxRoutines; ++i){
 		char key[6];

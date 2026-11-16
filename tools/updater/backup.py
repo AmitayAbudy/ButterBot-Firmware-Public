@@ -8,7 +8,9 @@ and IR remotes the robot learned (they stay on the robot).
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Callable
 
 import hopper_core as core
@@ -94,6 +96,34 @@ def collect(bot: str | None, ctrl: str | None, cfg: dict, app_version: str,
     return out, notes
 
 
+AUTO_DIR = core.APP_DIR / "auto-backups"   # made by the Flash tab just before each flash
+AUTO_KEEP = 10                              # per board
+
+
+def has_settings(data: dict, kind: str) -> bool:
+    """True if the backup holds anything the owner set up on that board (not just the defaults)."""
+    if kind in ("ctrl", "controller"):
+        c = data.get("controller") or {}
+        return bool(c.get("theme"))
+    r = data.get("robot") or {}
+    return any(r.get(k) for k in ("owner", "robot_name", "ramble", "start_line", "chat", "routines", "commands",
+                                  "schedules")) or bool(r.get("pitch") or r.get("speed")) or         bool((r.get("quiet") or {}).get("on"))
+
+
+def auto_save(data: dict, kind: str) -> Path:
+    """Saves a pre-flash backup and keeps the newest AUTO_KEEP for that board."""
+    AUTO_DIR.mkdir(parents=True, exist_ok=True)
+    path = AUTO_DIR / f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1, ensure_ascii=False)
+    for old in sorted(AUTO_DIR.glob(f"{kind}-*.json"))[:-AUTO_KEEP]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return path
+
+
 def summary(data: dict) -> list[str]:
     """What a backup holds, for the confirm dialog."""
     lines = [f"Made {data.get('made', '?')} by {data.get('app', '?')}."]
@@ -122,15 +152,28 @@ def restore(data: dict, bot: str | None, ctrl: str | None, cfg: dict,
     done = []
     failed: list[str] = []
 
+    worked = [0]
+
     def do(port, c, tag, part):
         rep = core.console_command(port, c, tag, timeout_s=6)
         if not rep or rep.get("result") == "error" or core.port_problem(rep, port):
             if part not in failed:
                 failed.append(part)
+        else:
+            worked[0] += 1
         return rep
+
+    def finished(board: str, failed_before: int):
+        """Counts a board as restored only for what actually went through."""
+        if len(failed) == failed_before:
+            done.append(board)
+        elif worked[0]:
+            done.append(f"part of the {board}")
+        worked[0] = 0
 
     r = data.get("robot")
     if r and bot:
+        before = len(failed)
         progress("Restoring the robot's voice and lines…")
         do(bot, f"voice {r['voice']}", "BBVOICE", "voice")
         do(bot, f"voice tune {int(r.get('pitch', 0))} {int(r.get('speed', 0))}", "BBVOICE", "voice")
@@ -176,17 +219,19 @@ def restore(data: dict, bot: str | None, ctrl: str | None, cfg: dict,
                 q = r.get("quiet")
                 if q:
                     do(bot, f"quiet {1 if q['on'] else 0} {q['start']} {q['end']}", "BBSCHED", "quiet hours")
-        done.append("robot")
+        finished("robot", before)
     elif r:
         failed.append("robot (not connected)")
 
     c = data.get("controller")
     if c and ctrl:
         progress("Restoring the controller…")
+        before = len(failed)
+        worked[0] = 0
         do(ctrl, f"theme {c['theme']}", "BBTHEME", "controller theme")
         if "bright" in c:
             do(ctrl, f"screen {c['bright']} {c['sleep']}", "BBSCREEN", "controller screen")
-        done.append("controller")
+        finished("controller", before)
     elif c:
         failed.append("controller (not connected)")
 

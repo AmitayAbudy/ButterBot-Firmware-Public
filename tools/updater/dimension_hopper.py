@@ -32,9 +32,10 @@ from routines_tab import RoutinesTab
 from hop_dialog import HopDialog
 import tooltip
 from hopper_core import Kind
+import backup as backup_mod
 
 APP_TITLE = "Dimension Hopper"
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 ROBOT_REPO = "Exadon/ButterBot-Firmware-Public"
 CTRL_REPO = "Exadon/ButterBotCtrl-Firmware-Public"
 
@@ -553,6 +554,12 @@ class App:
         self.bar_note = tk.Label(self.board_bar, text="", bg=PANEL, fg=DIM, font=("Segoe UI", 9))
         self.bar_note.pack(side="left", padx=10)
         self.scan_labels.append(self.bar_note)
+        # The robot at a glance: battery, firmware, controller link, settings storage (refreshed every 20 s)
+        self.bot_info = tk.Label(self.board_bar, text="", bg=PANEL, fg=DIM, font=("Segoe UI", 9))
+        self.bot_info.pack(side="right", padx=10)
+        self.bot_info_tip = tooltip.Tooltip(self.bot_info, "")
+        self._info_polling = False
+        root.after(4000, self._poll_bot_info)
 
         # "A new version is available" bar, shown under the header when the latest release has a newer app
         self.update_bar = tk.Frame(root, bg=PANEL_HI, highlightbackground=EDGE, highlightthickness=1)
@@ -964,10 +971,86 @@ class App:
             self.header.pack_configure(pady=(14, 6))
             self.titles.pack_configure(padx=16)
 
+    # --- the robot at a glance (board bar) ------------------------------------------------------------------------
+    INFO_EVERY_MS = 20000
+
+    def _poll_bot_info(self, again: bool = True):
+        if again:
+            self.root.after(self.INFO_EVERY_MS, self._poll_bot_info)
+        port = self.board_vars[Kind.BOT].get()
+        tabs = (self.personalize_tab, self.routines_tab)
+        if (not port or self._info_polling or self.busy or port in self.held_ports()
+                or any(getattr(t, "working", False) for t in tabs)):
+            if not port:
+                self._show_bot_info(None, "")
+            return
+        self._info_polling = True
+
+        def work():
+            r = core.console_command(port, "stat", "BBSTAT", timeout_s=6)
+            problem = core.port_problem(r, port) if r is not None else None
+
+            def ui():
+                self._info_polling = False
+                if self.board_vars[Kind.BOT].get() == port:
+                    self._show_bot_info(None if problem or not r else r, "off or busy" if problem else
+                                        ("no status (stock firmware?)" if not r else ""))
+            self.ui(ui)
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _storage(field: str) -> tuple[int, int] | None:
+        try:
+            used, total = (int(x) for x in field.split("/"))
+            return (used, total) if total > 0 else None
+        except (ValueError, AttributeError):
+            return None
+
+    def _show_bot_info(self, f: dict | None, why: str):
+        if f is None:
+            self.bot_info.configure(text=f"Robot: {why}" if why else "", fg=DIM)
+            self.bot_info_tip.set("The robot's battery, firmware, controller link and settings storage show "
+                              "here while it's on and plugged in.")
+            return
+        bits, tip, warn = [], [], False
+        try:
+            batt = int(f.get("batt", "-1"))
+        except ValueError:
+            batt = -1
+        charge = f.get("charge", "")
+        if batt >= 0:
+            bits.append(f"🔋 {batt}%" + (" ⚡" if charge == "charging" else ""))
+            tip.append(f"Battery {batt}% ({charge or 'unknown'})")
+            warn |= batt < 20 and charge != "charging"
+        link = f.get("link", "")
+        if link:
+            bits.append("🎮 linked" if link == "connected" else "🎮 not linked")
+            tip.append("Controller " + ("connected" if link == "connected" else "not connected"))
+        free = []
+        for key, what in (("nvs", "Personalize, WiFi, pairing"), ("user", "routines, commands, schedules")):
+            st = self._storage(f.get(key, ""))
+            if st:
+                pct = 100 - st[0] * 100 // st[1]
+                free.append(pct)
+                tip.append(f"Storage for {what}: {pct}% free ({(st[1] - st[0]) * 32 // 1024} of "
+                           f"{st[1] * 32 // 1024} KB)")
+        if free:
+            bits.append(f"💾 {min(free)}% free")
+            warn |= min(free) < 15
+        fw = f.get("fw", "")
+        if fw:
+            tip.append(f"Firmware {fw}")
+        if not free and fw:
+            tip.append("Update the robot's firmware to see its storage here.")
+        self.bot_info.configure(text="   ".join(bits), fg=WARN if warn else DIM)
+        self.bot_info_tip.set("\n".join(tip))
+
     def _board_picked(self, kind: str):
         device = self.board_vars[kind].get()
         if device:
             self.port_found(kind, device)
+        if kind == Kind.BOT:
+            self.root.after(300, lambda: self._poll_bot_info(again=False))
 
     def scan_from_bar(self):
         """The bar's Scan: the open tab's own scan when it has one (it reads its board afterwards)."""
@@ -1337,6 +1420,9 @@ class App:
             return f
 
         try:
+            # 0. save what the owner set up on it, while it still runs its firmware (the probe below stops it)
+            pre = self._settings_before_flash(s, port, status)
+
             # 1. identify the board (always re-probe: ports get renumbered, cables get swapped)
             status(quip("probe"), pct=0)
             r = core.probe(port, baud)
@@ -1419,11 +1505,69 @@ class App:
                 return False
             status(f"Running the new firmware ({st.firmware}) ✔", GREEN, 100)
             self.tlog(f"[{name}] done ✔ - booted {st.firmware}", "hi")
+            if pre:
+                self._check_settings_after_flash(s, port, *pre)
             return True
         except (core.EsptoolError, core.ImageError, OSError, ValueError, RuntimeError) as e:
             status(f"✖ {e}", BAD)
             self.tlog(f"[{name}] {e}", "bad")
             return False
+
+    # --- settings kept across a flash (backup.py) ---------------------------------------------------------------
+    def _settings_before_flash(self, s: DeviceSlot, port: str, status) -> tuple[dict, Path] | None:
+        """Backs up the board's settings (names, lines, routines... or the controller's theme) before flashing, if
+        it runs firmware that has them. Returns (backup, file), or None if there was nothing to save."""
+        bot = s.kind == Kind.BOT
+        status("Saving your settings first…", pct=0)
+        try:
+            data, _ = backup_mod.collect(port if bot else None, None if bot else port, self.cfg, VERSION)
+        except Exception as e:  # never stop a flash over this
+            self.tlog(f"[{Kind.LABEL[s.kind]}] couldn't save its settings first: {e}", "warn")
+            return None
+        if not backup_mod.has_settings(data, s.kind):
+            return None
+        path = backup_mod.auto_save(data, s.kind)
+        self.tlog(f"[{Kind.LABEL[s.kind]}] settings saved first: {core.short_path(path)}", "hi")
+        return data, path
+
+    def _check_settings_after_flash(self, s: DeviceSlot, port: str, before: dict, path: Path):
+        """After a flash: if the board came back without the settings it had, offer to put them back."""
+        bot = s.kind == Kind.BOT
+        try:
+            after, _ = backup_mod.collect(port if bot else None, None if bot else port, self.cfg, VERSION)
+        except Exception:
+            return
+        if backup_mod.has_settings(after, s.kind):
+            self.tlog(f"[{Kind.LABEL[s.kind]}] your settings are still there ✔", "hi")
+            return
+        self.tlog(f"[{Kind.LABEL[s.kind]}] came back without your settings - offering to restore them.", "warn")
+        self.ui(lambda: self._offer_restore(s, before, path))
+
+    def _offer_restore(self, s: DeviceSlot, data: dict, path: Path):
+        if self.busy:  # the update job is still finishing
+            self.root.after(500, lambda: self._offer_restore(s, data, path))
+            return
+        name = Kind.LABEL[s.kind]
+        if not self.confirm(f"Put your {name} settings back?",
+                            f"The {name} came back from the flash without the settings it had. Dimension Hopper "
+                            "saved them just before flashing - restore them now?",
+                            details=backup_mod.summary(data) + [f"Saved in {core.short_path(path)}"], ok="Restore"):
+            return
+        bot = s.kind == Kind.BOT
+        port = s.port()
+        data = dict(data, pc={})  # the board's settings only: this PC's AI settings never left
+
+        def work():
+            try:
+                result = backup_mod.restore(data, port if bot else None, None if bot else port, self.cfg)
+            except ValueError as e:
+                result = [str(e)]
+            bad = any(r.startswith(("Didn't", "Nothing")) for r in result)
+            self.tlog(f"[{name}] restore: " + " ".join(result), "bad" if bad else "hi")
+            self.ui(lambda: ((self.error if bad else self.info)("\n".join(result), "Restore"),
+                             self.personalize_tab.after(300, self.personalize_tab._read_boards),
+                             self.routines_tab.after(600, self.routines_tab.read_all)))
+        self.job("Restore", work)
 
     # --- repo options ---------------------------------------------------------------------
     def open_repo_dialog(self):

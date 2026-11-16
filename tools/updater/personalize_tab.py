@@ -34,18 +34,20 @@ THEMES = (("Main", "#a0fa00", "#00b400", "#000000"), ("Rose", "#e90081", "#5c00d
           ("Purple", "#c878ff", "#ff50c8", "#100020"))
 
 VOICES = (
-    ("classic", "Classic", "The original voice (factory default)"),
-    ("deep", "Deep", "Lower and slower"),
-    ("high", "High", "Higher and quicker"),
-    ("sassy", "Sassy", "Bouncy, big swings in pitch"),
-    ("deadpan", "Deadpan", "Flat, slow and thoroughly unimpressed"),
-    ("robot", "Robot", "Metallic, ring-modulated"),
-    ("retro", "Retro", "Crunchy, 8-bit"),
-    ("announcer", "Announcer", "Big voice with an echo"),
+    ("classic", "🧈 Classic", "The original voice (factory default)"),
+    ("deep", "🐻 Deep", "Lower and slower"),
+    ("high", "🐭 High", "Higher and quicker"),
+    ("sassy", "💅 Sassy", "Bouncy, big swings in pitch"),
+    ("deadpan", "😑 Deadpan", "Flat, slow and thoroughly unimpressed"),
+    ("robot", "🤖 Robot", "Metallic, ring-modulated"),
+    ("retro", "👾 Retro", "Crunchy, 8-bit"),
+    ("announcer", "📢 Announcer", "Big voice with an echo"),
     ("show", "📺 Show accurate", "Closest to the ButterBot from the show: pitch, speed and sound measured from the "
                                 "episode, and locked"),
 )
 SHOW = "show"
+PERSONALITY_ICONS = {"classic": "🙄", "sarcastic": "😏", "dramatic": "🎭", "wholesome": "🌻", "grumpy": "😾",
+                     "custom": "✏️"}
 SHOW_TIP = ("Forces pitch, speed and sound to be closer to the show's ButterBot (measured from the episode: a low, "
             "flat, slow voice through a tiny tinny speaker). The Pitch and Speed sliders are locked until you pick "
             "another voice.")
@@ -336,8 +338,11 @@ class PersonalizeTab(tk.Frame):
 
     def _cmd(self, cmds: list[tuple[str, str]], done):
         """Runs console commands in order on a worker thread; done(list of replies) on the UI thread."""
+        if self.working:  # still reading or saving: run this once that's done instead of dropping it
+            self.after(300, lambda: self._cmd(cmds, done))
+            return
         port = self._port()
-        if not port or self.working:
+        if not port:
             return
         self.working = True
 
@@ -867,8 +872,8 @@ class PersonalizeTab(tk.Frame):
         self.pers_var = tk.StringVar(value=self.app.cfg.get("ai_personality", "classic"))
         grid = tk.Frame(card, bg=p["PANEL"])
         grid.pack(fill="x", padx=12)
-        options = [(k, v[0], v[1]) for k, v in brain.PERSONALITIES.items()] + [
-            ("custom", "Your own", "Describe it below")]
+        options = [(k, f"{PERSONALITY_ICONS.get(k, '')} {v[0]}", v[1]) for k, v in brain.PERSONALITIES.items()] + [
+            ("custom", f"{PERSONALITY_ICONS['custom']} Your own", "Describe it below")]
         for i, (key, label, desc) in enumerate(options):
             tk.Radiobutton(grid, text=label, value=key, variable=self.pers_var, command=self.save_personality,
                            bg=p["PANEL"], fg=p["TEXT"], selectcolor=p["PANEL_HI"], activebackground=p["PANEL"],
