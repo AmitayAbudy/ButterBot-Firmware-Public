@@ -41,6 +41,9 @@ runs locally: [Whisper](https://github.com/SYSTRAN/faster-whisper) turns speech 
   compact 8 kHz recording; a typical answer arrives about 5 seconds after you stop talking.
 - The controller shows what's happening: *Listening*, *Heard you*, *Consulting my brain…*, then subtitles of what it
   heard and what it is saying.
+- **Conversation mode**: hold **Poke + Summon** on the controller and just keep talking - after every reply it
+  listens again by itself, and remembers what was said earlier in the chat. Any button, "goodbye" or two quiet
+  turns end it.
 - Answers the controller's *Robot Status* page (battery, memory, WiFi, AI mode, last conversation, firmware).
 - If the PC isn't reachable, the robot says what's wrong in plain words (WiFi not found, wrong password, brain not
   running…) and uses its built-in voice commands for the next two minutes. Nothing breaks.

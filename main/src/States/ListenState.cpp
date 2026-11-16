@@ -1,5 +1,7 @@
 #include "Routines/UserRoutine.h"
 #include "Services/UserData.h"
+#include "Services/Conversation.h"
+#include <esp_heap_caps.h>
 #include "ListenState.h"
 #include "BBStateMachine.h"
 #include "Audio/AudioFrontend.h"
@@ -150,7 +152,8 @@ namespace {
         return buf;
     }
 
-    void buildAndPlayIntro(const Application* app){
+    // Fork: spoken = false for conversation-mode follow-ups: one short sound says "your turn", no "Yes?" every time
+    void buildAndPlayIntro(const Application* app, bool spoken = true){
         Audio* audio = app->getService<Audio>();
         AACAudioGenerator* aacGen = app->getService<AACAudioGenerator>();
         if(audio == nullptr || aacGen == nullptr || ServiceLocator::SpeechAudioGenInstance == nullptr || ServiceLocator::SpeechGenInstance == nullptr){
@@ -161,7 +164,7 @@ namespace {
         // Fork: durations were measured with the stock voice; a faster/slower voice preset scales them, and the
         // prompt must still end when the recogniser is ready.
         const uint32_t promptMs = static_cast<uint32_t>(prompt.durationMs * Voice::stretch() / Voice::StockStretch);
-        const uint32_t budget = promptMs >= IntroWindowMs ? 0 : IntroWindowMs - promptMs;
+        const uint32_t budget = !spoken ? 1 : (promptMs >= IntroWindowMs ? 0 : IntroWindowMs - promptMs);
 
         const SfxGroup& group = SfxGroups[rand() % std::size(SfxGroups)];
 
@@ -196,7 +199,12 @@ namespace {
             accumulated += sfx.durationMs;
         }
 
-        batch.emplace_back(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, prompt.text));
+        if(spoken){
+            batch.emplace_back(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, prompt.text));
+        }
+        if(batch.empty()){
+            return;
+        }
 
         audio->play(std::span<Audio::GenSourcePair>(batch));
     }
@@ -226,7 +234,11 @@ struct ListenState::AiSession {
 	uint16_t port = 0;
 	char voice[16] = {};
 	bool handled = false;
-	bool recordingStopped = false;
+	std::atomic<bool> recordingStopped{ false }; // the recording is done and the listening engine unloaded
+	// Start WiFi only once recordingStopped: WiFi (~25 KB of internal RAM) and the listening engine (~17 KB) together
+	// leave ~12 KB, and the WiFi driver loses a few hundred bytes per start/stop - after a handful of back-to-back
+	// listens esp_wifi_init found no 3.3 KB block and the robot aborted. Set when RAM is short or in a conversation.
+	bool wifiAfterRecording = false;
 	uint32_t heardAt = 0;       // when "Heard" went to the controller
 	bool thinkingShown = false; // "Thinking" sent
 };
@@ -243,6 +255,10 @@ namespace {
 	constexpr uint32_t BrainOffCooldownMs = 3 * 60 * 1000; // brain not there: usually the PC or the app is just off
 	std::atomic<uint32_t> aiCooldownUntil{ 0 }; // also cleared from the console task ("ai on")
 
+	// Joining WiFi while recording is only safe with this much internal RAM before the listening engine loads
+	constexpr size_t OverlapMinFree = 58 * 1024;
+	constexpr size_t OverlapMinBlock = 24 * 1024;
+
 	bool aiCoolingDown(){
 		const uint32_t until = aiCooldownUntil;
 		return until != 0 && (int32_t) (millis() - until) < 0;
@@ -253,6 +269,12 @@ namespace {
 		std::shared_ptr<ListenState::AiSession> s = *holder;
 		delete holder;
 
+		if(s->wifiAfterRecording){
+			const uint32_t waitStart = millis();
+			while(!s->recordingStopped && !s->cancel && millis() - waitStart < 25000){
+				vTaskDelay(pdMS_TO_TICKS(30));
+			}
+		}
 		const HomeWiFi::Result r = s->wifi.start(s->cfg, 7000);
 		if(r != HomeWiFi::Result::Ok){
 			s->linkError = HomeWiFi::resultName(r);
@@ -297,6 +319,10 @@ namespace {
 	}
 }
 
+bool ListenState::aiBusy(){
+    return aiWorkerRunning.load();
+}
+
 void ListenState::clearAiPause(){
     if(aiCooldownUntil.exchange(0) != 0){
         printf("[BBAI] event=pause_cleared\n");
@@ -319,6 +345,15 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
         if(cfg.aiEnabled && !cfg.ssid.empty() && !aiWorkerRunning && !aiCoolingDown()){
             ai = std::make_shared<AiSession>();
             ai->cfg = cfg;
+            // Before the listening engine loads: is there room to join WiFi while it records? (see AiSession)
+            const size_t freeRam = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            const size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            const bool followUp = Conversation::active() && Conversation::turns.load() > 0;
+            ai->wifiAfterRecording = followUp || freeRam < OverlapMinFree || block < OverlapMinBlock;
+            if(ai->wifiAfterRecording){
+                printf("[BBAI] event=wifi_after_recording free=%u block=%u conv=%d\n", (unsigned) (freeRam / 1024),
+                       (unsigned) (block / 1024), followUp ? 1 : 0);
+            }
             strncpy(ai->voice, Voice::current().name, sizeof(ai->voice) - 1);
             aiWorkerRunning = true;
             auto* holder = new std::shared_ptr<AiSession>(ai);
@@ -333,7 +368,15 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
 
     const Application* app = ApplicationStatics::getApplication();
 
-    buildAndPlayIntro(app);
+    // Fork: conversation mode - the first turn gets the usual prompt, later ones just a short sound
+    const bool followUp = Conversation::active() && Conversation::turns.load() > 0;
+    if(Conversation::active()){
+        ++Conversation::turns;
+        printf("[BBCONV] event=listen turn=%d ram=%u block=%u\n", Conversation::turns.load(),
+               (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+               (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+    }
+    buildAndPlayIntro(app, !followUp);
 
     auto buttonInput = app->getService<ISRButtonInput>();
     if(buttonInput == nullptr){
@@ -477,6 +520,14 @@ void ListenState::fallBackToOffline(const Application* app, const char* why){
     sm->transitionTo<IdleState>();
 }
 
+void ListenState::sayLine(const Application* app, const char* line){
+    if(Audio* audio = app->getService<Audio>(); audio != nullptr && ServiceLocator::SpeechAudioGenInstance){
+        audio->play(ServiceLocator::SpeechAudioGenInstance.get(),
+                    std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, line));
+        audio->waitEnd(portMAX_DELAY);
+    }
+}
+
 ListenState::~ListenState(){
     // Event bindings are dropped by BBStateMachine::unbindStateEvents() after this dtor runs.
     if(ai){
@@ -489,7 +540,12 @@ ListenState::~ListenState(){
     }
 
     if(timedOut){
-        playPhraseBlocking(app, Phrase::ListeningTimeout);
+        if(Conversation::active()){
+            // Conversation mode: a quiet turn just listens again; the last allowed one ends the chat
+            if(Conversation::quietTurn()) sayLine(app, ConversationOverLine);
+        }else{
+            playPhraseBlocking(app, Phrase::ListeningTimeout);
+        }
     }
 }
 
@@ -509,11 +565,11 @@ void ListenState::tick(float){
         return;
     }
     if(ai->rec->done && !ai->recordingStopped){
-        ai->recordingStopped = true;
         if(audioFrontend){
             audioFrontend->setMode(AudioFrontend::Mode::Off);
             audioFrontend->unloadModel(); // ~17 KB of internal RAM back before WiFi has to send
         }
+        ai->recordingStopped = true; // after the unload: a worker waiting for it starts WiFi now
         printf("[BBAI] event=recorded ms=%u speech=%d\n", (unsigned) (ai->rec->pcm.size() / 16), ai->rec->heardSpeech ? 1 : 0);
         MemMark::mark("ai: recorded");
         if(com != nullptr && ai->rec->heardSpeech){
@@ -541,8 +597,9 @@ void ListenState::tick(float){
 
     if(!r.ok){
         if(r.error == "heard_nothing"){
-            timedOut = true; // the dtor plays the usual "didn't hear you" line
+            timedOut = true; // the dtor plays the usual "didn't hear you" line (or counts a quiet conversation turn)
         }else{
+            Conversation::end("brain_error");
             HomeWiFi::setLastProblem(r.error.c_str());
             aiCooldownUntil = (millis() + cooldownFor(r.error)) | 1;
             if(Audio* audio = app->getService<Audio>()){
@@ -578,6 +635,16 @@ void ListenState::tick(float){
             audio->play(ServiceLocator::SpeechAudioGenInstance.get(),
                         std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, r.say));
             audio->waitEnd(portMAX_DELAY);
+        }
+    }
+
+    // Fork: conversation mode - a goodbye ends it (after the reply), and so do too many turns with nothing heard
+    if(Conversation::active()){
+        if(r.heard.empty()){
+            if(Conversation::quietTurn()) sayLine(app, ConversationOverLine);
+        }else{
+            Conversation::heardSomething();
+            if(Conversation::isGoodbye(r.heard)) Conversation::end("goodbye");
         }
     }
 
@@ -633,10 +700,13 @@ void ListenState::onPhrase(bool recognized, int index, const std::string& transc
 
 	if(index < 0){
         // Abort phrase
+        Conversation::end("cancel");
         aborted();
         sm->transitionTo<IdleState>();
         return;
     }
+
+    Conversation::heardSomething();
 
     if(!ServiceLocator::ScenarioRoutineServiceInstance){
         CMF_LOG(ListenState, LogLevel::Error, "ScenarioRoutineService missing in onPhrase");
@@ -692,7 +762,14 @@ void ListenState::onButtonEvent(int button, ISRButtonInput::Action action){
 }
 
 void ListenState::onCommand(Ctrl::Command cmd) {
-    if(cmd == Ctrl::Command::Listen || cmd == Ctrl::ShutUp){
+    if(cmd == Ctrl::Command::Converse){
+        Conversation::start(); // already listening: this listen is the first turn
+        return;
+    }
+    // Fork: in conversation mode any button stops listening (main.cpp ends the conversation itself)
+    const bool convButton = (Conversation::active() || Conversation::justEnded()) &&
+                            (cmd == Ctrl::Command::Poke || cmd == Ctrl::Command::Summon || cmd == Ctrl::Command::EnterRC);
+    if(cmd == Ctrl::Command::Listen || cmd == Ctrl::ShutUp || convButton){
         aborted();
         sm->transitionTo<IdleState>();
     	return;

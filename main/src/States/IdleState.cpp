@@ -27,6 +27,7 @@
 #include "Routines/UserRoutine.h"
 #include "Services/Time.h"
 #include "Services/UserData.h"
+#include "Services/Conversation.h"
 
 DEFINE_LOG(IdleState)
 
@@ -56,6 +57,7 @@ const std::array<EventRoutineFactory, static_cast<uint8_t>(EventBag::EventType::
 };
 
 IdleState::IdleState(BBStateMachine* sm) : State(sm){
+	enteredAt = millis();
 	if(ServiceLocator::SettingsInstance){
 		applyActivityMode(ServiceLocator::SettingsInstance->get().activityMode);
 	}
@@ -122,6 +124,23 @@ IdleState::~IdleState(){
 void IdleState::tick(float deltaTime){
 	if(sm->isTransitionPending()){
 		return;
+	}
+
+	// Fork: conversation mode - every way out of a listen (a reply, an action, an error) lands here; go straight back
+	if(Conversation::active()){
+		if(Conversation::turns.load() >= Conversation::MaxTurns){
+			Conversation::end("max_turns");
+		}else if(millis() - enteredAt < ConversationGapMs){
+			return;
+		}else if(ListenState::aiBusy() && millis() - enteredAt < ConversationWifiWaitMs){
+			// The last turn's AI worker is still switching WiFi off. Listening now would take the offline path and
+			// load its speech model while WiFi still holds its internal RAM - that ran the robot out of memory.
+			return;
+		}else{
+			if(ListenState::aiBusy()) printf("[BBCONV] event=wifi_wait_timeout\n");
+			sm->transitionTo<ListenState>();
+			return;
+		}
 	}
 
 	if(eventBag == nullptr){
@@ -379,6 +398,9 @@ void IdleState::onSettings(const SettingsData& data){
 }
 
 int64_t IdleState::getDynamicTickInterval() const{
+	if(Conversation::active()){
+		return 50; // back to listening right after the gap
+	}
 	if(eventBag == nullptr){
 		CMF_LOG(IdleState, LogLevel::Error, "Event Bag is nullptr.");
 		return -1;
@@ -414,6 +436,14 @@ int64_t IdleState::getDynamicTickInterval() const{
 }
 
 void IdleState::onCommand(Ctrl::Command cmd){
+	if(cmd == Ctrl::Command::Converse){
+		Conversation::start();
+		sm->transitionTo<ListenState>();
+		return;
+	}
+	if(Conversation::justEnded()){
+		return; // the button that ended conversation mode does nothing else
+	}
 	if(cmd == Ctrl::Command::Listen){
 		sm->transitionTo<ListenState>();
 		return;
@@ -455,6 +485,10 @@ void IdleState::onButtonEvent(int button, ISRButtonInput::Action action){
 	}
 
 	buttonHeld = false;
+
+	if(Conversation::justEnded()){
+		return; // fork: that press ended conversation mode (in ListenState); its release doesn't start a new listen
+	}
 
 	if(millis() - lastBtnPressTime > MaximumBtnHoldForTransition){
 		return;

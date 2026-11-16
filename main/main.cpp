@@ -53,6 +53,7 @@
 #include "Services/HomeWiFi.h"
 #include "Services/Personal.h"
 #include "Services/UserData.h"
+#include "Services/Conversation.h"
 #include "Services/Time.h"
 #include <Scenarios.h>
 #include "Services/BrainLink.h"
@@ -1598,6 +1599,13 @@ private:
 	}
 
 	void onCommand(const Ctrl::Command command){
+		// Fork: conversation mode ends with any controller button (the states see the same command and stop
+		// listening). The press that ends it does nothing else - Shut Up doesn't also toggle mute.
+		if(Conversation::active() && command != Ctrl::Status && command != Ctrl::Converse && command != Ctrl::Drive &&
+		   command != Ctrl::Settings){
+			Conversation::end("button");
+			return;
+		}
 		if(command == Ctrl::Status){
 			// Reads the WiFi settings from flash, so it runs on an internal-stack task
 			runFlashJob([this]{ sendRobotStatus(); });
@@ -1772,6 +1780,7 @@ private:
 
 	void onButtonEvent(int button, ISRButtonInput::Action action){
 		if(action == ISRButtonInput::Action::Press){
+			Conversation::end("button"); // fork: the robot's button ends conversation mode too
 			pressed = true;
 			lastPress = millis();
 		}else if(action == ISRButtonInput::Action::Release){

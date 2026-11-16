@@ -1,4 +1,5 @@
 #include "BrainLink.h"
+#include "Conversation.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -213,8 +214,10 @@ Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, c
 	       (unsigned) ulaw.size());
 
 	char head[160];
-	const int hn = snprintf(head, sizeof(head), "BBTALK 1 rate=%u fmt=ulaw bytes=%u voice=%s fw=%s\n",
-	                        (unsigned) SendRate, (unsigned) ulaw.size(), voice, esp_app_get_description()->version);
+	// conv=1: conversation mode, so the brain keeps the whole session as context (older brains ignore the field)
+	const int hn = snprintf(head, sizeof(head), "BBTALK 1 rate=%u fmt=ulaw bytes=%u voice=%s fw=%s conv=%d\n",
+	                        (unsigned) SendRate, (unsigned) ulaw.size(), voice, esp_app_get_description()->version,
+	                        Conversation::active() ? 1 : 0);
 	// WiFi and Bluetooth share one radio; for the upload WiFi gets priority (the controller link just slows briefly)
 	// Measured: WiFi priority is 3-4x faster than balanced; pausing BLE advertising on top didn't help
 	radioFor(1, true);

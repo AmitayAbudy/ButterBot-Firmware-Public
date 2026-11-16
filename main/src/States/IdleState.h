@@ -44,6 +44,9 @@ private:
 	bool buttonHeld = false;
 	// Poke/Motion events handled before this time are stale (queued while a routine ran) and are dropped.
 	uint64_t instantEventCutoff = 0;
+	uint64_t enteredAt = 0; // fork: conversation mode goes back to listening a moment after Idle starts
+	static constexpr uint64_t ConversationGapMs = 250;
+	static constexpr uint64_t ConversationWifiWaitMs = 10000; // at most this long for the AI worker to finish
 
 	static constexpr uint64_t MaximumBtnHoldForTransition = 500;
 	static constexpr uint64_t StaleEventWindow = 100; // ms

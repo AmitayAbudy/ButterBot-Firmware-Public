@@ -41,6 +41,14 @@ private:
 
     void aborted();
 
+    // Fork: conversation mode
+public:
+    /** The AI worker is still running (WiFi on, ~25 KB of internal RAM) - wait before listening again. */
+    static bool aiBusy();
+private:
+    static void sayLine(const class Application* app, const char* line);
+    static constexpr const char* ConversationOverLine = "Okay. I'll be here if you need me.";
+
     // Fork: the usual offline command list (also the fallback when the AI brain can't be reached)
     void startOffline(const class Application* app);
     void fallBackToOffline(const class Application* app, const char* why);

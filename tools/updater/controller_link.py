@@ -23,7 +23,8 @@ from typing import Callable
 import hopper_core as core
 
 # --- enums, in declaration order (append-only in the firmware) ------------------------------------------------
-CTRL = ["EnterRC", "ExitRC", "Listen", "Summon", "ShutUp", "Poke", "Drive", "RCSound", "Scenario", "Settings", "Status"]
+CTRL = ["EnterRC", "ExitRC", "Listen", "Summon", "ShutUp", "Poke", "Drive", "RCSound", "Scenario", "Settings", "Status",
+        "Converse"]
 CMD = {name: i for i, name in enumerate(CTRL)}
 
 STATES = ["Idle", "Listen", "Scenario", "RC"]

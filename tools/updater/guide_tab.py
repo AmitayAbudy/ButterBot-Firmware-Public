@@ -44,6 +44,7 @@ ROBOT_PARTS = [
 CONTROLLER_NOTES = [
     "In menus the stick moves, Shut up selects, Override goes back.",
     "Settings is the first row of the menu.",
+    "Hold Poke + Summon: conversation mode - it listens again after every reply; any button ends it.",
 ]
 
 

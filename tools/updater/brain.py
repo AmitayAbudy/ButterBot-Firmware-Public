@@ -90,6 +90,8 @@ CUSTOM_MAX = 400
 FACTS_MAX = 600
 MEMORY_MAX = 40          # notes kept; the oldest go first
 MEMORY_IN_PROMPT = 20    # the newest ones the brain sees
+HISTORY_TURNS = 4          # exchanges sent with a one-off question, so follow-ups make sense
+CONVERSATION_TURNS = 20    # in conversation mode (Poke + Summon held): most of the session
 MEMORY_GAP_S = 300       # this long without a question ends a conversation (and it gets remembered)
 
 
@@ -291,6 +293,7 @@ class Thinker:
         self.system = build_system(settings, actions)
         self.phrases |= {c["phrase"] for c in settings.commands if c.get("phrase")}
         self.history: list[dict] = []   # recent exchanges, so follow-ups make sense
+        self.conversation = False       # the robot is in conversation mode: send more of the history
         self.last_at = 0.0
         self.finished: list[list[dict]] = []   # ended conversations waiting to be remembered
         self.lock = threading.Lock()
@@ -299,7 +302,8 @@ class Thinker:
         with self.lock:
             if time.time() - self.last_at > MEMORY_GAP_S:  # five quiet minutes: start a fresh conversation
                 self.end_conversation()
-            return self.history[-8:] + [{"role": "user", "content": heard}]
+            keep = 2 * (CONVERSATION_TURNS if self.conversation else HISTORY_TURNS)
+            return self.history[-keep:] + [{"role": "user", "content": heard}]
 
     def end_conversation(self):
         """Moves the current conversation to the to-remember list (call with self.lock held)."""
@@ -364,7 +368,9 @@ class Thinker:
                 best = phrase
         return best
 
-    def think(self, heard: str) -> dict:
+    def think(self, heard: str, conversation: bool = False) -> dict:
+        """conversation: the robot is in conversation mode (it sends conv=1), so more of the session goes along."""
+        self.conversation = conversation
         own = self.own_command(heard)
         clock = time_action(self.actions)
         if not own and clock and TIME_QUESTION.search(heard):
@@ -835,7 +841,7 @@ class BrainServer:
                 return
             t2 = time.time()
             try:
-                reply = self.thinker.think(heard)
+                reply = self.thinker.think(heard, conversation=fields.get("conv") == "1")
             except Exception as e:  # noqa: BLE001
                 send("ERR think_failed")
                 finish(Turn(heard, "", "", time.time() - t0, str(e), think_s=time.time() - t2, **timing))

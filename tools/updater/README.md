@@ -165,6 +165,14 @@ Four steps, each with a lamp (NOT SET UP / TO DO / WORKING… / READY / PROBLEM)
 The brain also runs your own voice commands (Routines tab) whenever you say their phrase, and hands "what time is
 it?" to the robot's own clock instead of letting the AI guess.
 
+**Conversation mode** - hold **Poke + Summon** on the controller for a moment (a *Conversation* bar fills). After
+every reply the robot plays a short sound and listens again, no button needed. The brain keeps up to 20 exchanges of
+the chat as context (one-off questions get the last 4). It ends with any button on the robot or the controller,
+"goodbye" / "that's all" / "stop talking", two turns in a row with nothing heard, or after 25 turns. From the second
+turn on, the robot joins WiFi after you've finished speaking rather than while you talk (the robot's internal memory
+can't hold both for long), so follow-up answers take a second or two longer. Needs this release on both the robot and
+the controller (**Update both** on the Flash tab).
+
 The **Conversations** table shows what you said, ButterBot's answer, the action, and how long the upload, hearing and
 thinking took. Every conversation is also logged to `%LOCALAPPDATA%\DimensionHopper\brain_log.jsonl`.
 
