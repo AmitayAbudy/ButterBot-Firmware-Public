@@ -252,6 +252,7 @@ namespace {
 	 * wouldn't start again until a reboot - so a failed AI listen just ends, and the next press is the offline one.
 	 */
 	constexpr uint32_t AiCooldownMs = 2 * 60 * 1000;        // after a WiFi problem (worth retrying soon)
+	constexpr uint32_t ShortCooldownMs = 20 * 1000;        // router slow to hand out an address
 	constexpr uint32_t BrainOffCooldownMs = 3 * 60 * 1000; // brain not there: usually the PC or the app is just off
 	std::atomic<uint32_t> aiCooldownUntil{ 0 }; // also cleared from the console task ("ai on")
 
@@ -474,6 +475,7 @@ static bool brainProblem(const std::string& why){
 }
 
 static uint32_t cooldownFor(const std::string& why){
+    if(why == "no_ip_address") return ShortCooldownMs; // the router was slow once: usually fine on the next try
     return brainProblem(why) ? BrainOffCooldownMs : AiCooldownMs;
 }
 

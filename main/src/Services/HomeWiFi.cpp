@@ -199,8 +199,9 @@ HomeWiFi::Result HomeWiFi::start(const Config& cfg, uint32_t timeoutMs){
 			return Result::Ok;
 		}
 		if(!(bits & Failed)){
-			// Joined but the router never gave an address: retrying the association won't help
-			if(associated) return Result::NoIp;
+			// Joined but no address yet: the join may have used up most of the time, so give the router's DHCP its
+			// own time instead of failing (retrying the association wouldn't help)
+			if(associated) return waitForIp();
 			// No answer at all yet: the driver is still scanning/joining (slow with Bluetooth sharing the radio),
 			// so give it a second period rather than restarting the attempt
 			if(attempt == 1) return Result::Timeout;
@@ -215,6 +216,27 @@ HomeWiFi::Result HomeWiFi::start(const Config& cfg, uint32_t timeoutMs){
 		esp_wifi_connect();
 	}
 	return Result::Failed;
+}
+
+HomeWiFi::Result HomeWiFi::waitForIp(){
+	// Joined the network but the router hasn't handed out an address. Routers sometimes drop the first request
+	// (busy, or still clearing the robot's previous session from a few seconds ago), so wait a bit, then ask once more.
+	for(int round = 0; round < 2; ++round){
+		const EventBits_t bits = xEventGroupWaitBits(events, GotIp | Failed, pdTRUE, pdFALSE,
+		                                             pdMS_TO_TICKS(round == 0 ? DhcpWaitMs : DhcpRetryWaitMs));
+		if(bits & GotIp){
+			if(round > 0) printf("[BBWIFI] event=dhcp_retry_ok\n");
+			MemMark::mark("wifi: got ip");
+			return Result::Ok;
+		}
+		if(bits & Failed) return Result::Failed; // dropped off the network while waiting
+		if(round == 0 && netif){
+			printf("[BBWIFI] event=dhcp_retry\n");
+			esp_netif_dhcpc_stop(netif);
+			esp_netif_dhcpc_start(netif);
+		}
+	}
+	return Result::NoIp;
 }
 
 void HomeWiFi::stop(){

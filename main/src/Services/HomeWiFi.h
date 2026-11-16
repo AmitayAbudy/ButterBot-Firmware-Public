@@ -69,6 +69,9 @@ public:
 
 private:
 	bool bringUp();
+	Result waitForIp();
+	static constexpr uint32_t DhcpWaitMs = 5000;      // after joining, before asking the router again
+	static constexpr uint32_t DhcpRetryWaitMs = 4000; // after asking again
 	esp_netif_t* netif = nullptr;
 	EventGroupHandle_t events = nullptr;
 	esp_event_handler_instance_t wifiHandler = nullptr;
