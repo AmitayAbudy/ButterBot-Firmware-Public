@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 EXE_ASSET = "DimensionHopper.exe"
+MAC_ASSET = "DimensionHopper-mac.zip"  # the Mac app; updated by hand from the release page
 MANIFEST_ASSET = "dimensionhopper.json"
 CHECK_EVERY_S = 20 * 3600  # automatic checks at start-up reuse the last answer for this long
 UA = {"User-Agent": "DimensionHopper-updater"}

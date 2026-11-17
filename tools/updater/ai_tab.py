@@ -15,7 +15,6 @@ import sys
 import threading
 import time
 import tkinter as tk
-import webbrowser
 from pathlib import Path
 from tkinter import ttk
 
@@ -43,8 +42,9 @@ FIRST-TIME SETUP
 5. With the robot still plugged in, press "Start AI conversations": it starts the brain and sets the robot up to use \
 it (its AI setting and this PC's address). Then unplug it, press listen and talk. From then on Start works without the \
 robot plugged in - unless this PC's address changes (the status line says so). To stop that ever happening, give this \
-PC a reserved / fixed address in your router's app. The first time, Windows may ask whether Dimension Hopper may \
-use the network: allow it on PRIVATE networks, or the robot can't reach this PC.
+PC a reserved / fixed address in your router's app. The first time, Windows (or macOS) may ask whether Dimension \
+Hopper may use the network / accept incoming connections: allow it (on Windows, on PRIVATE networks), or the \
+robot can't reach this PC.
 
 PRIVACY
 Your voice is turned into text on this PC. Only the text goes to the AI you picked (or stays on this PC with Ollama). \
@@ -267,7 +267,7 @@ class AITab(tk.Frame):
         self.app.button(btns, "Test robot WiFi", self.test_wifi, small=True).pack(side="left", padx=6)
         self.app.button(btns, "Check robot", self.check_robot, small=True).pack(side="left")
         self.wifi_status.configure(text="2.4 GHz networks only. The password goes to the robot over USB; with 'remember' "
-                                        "ticked it's also kept in Windows Credential Manager on this PC.")
+                                        f"ticked it's also kept in {CRED_STORE} on this PC.")
         # The address the robot is given for the brain (Test robot WiFi and Start send it over USB)
         self.pc_ip_lbl = tk.Label(body, text="", bg=self.pal["PANEL"], fg=self.pal["DIM"], font=("Segoe UI", 8))
         self.pc_ip_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -648,7 +648,7 @@ class AITab(tk.Frame):
         if claude:
             has = bool(brain.load_api_key())
             self._say(self.think_status, self.think_lamp,
-                      "API key saved (in Windows Credential Manager). Checked when the brain starts, or hit Try it."
+                      f"API key saved (in {CRED_STORE}). Checked when the brain starts, or hit Try it."
                       if has else
                       "Paste an API key from console.anthropic.com and hit Save. Pay-as-you-go; a chat costs a "
                       "fraction of a cent. Opus is the smartest; Haiku answers fastest.", "unchecked" if has else "warn")
@@ -977,15 +977,14 @@ class AITab(tk.Frame):
 # Set to True to bring back the provider choice, the key box and the help text.
 OFFER_CLAUDE = False
 
+# Where keyring keeps passwords and keys
+CRED_STORE = "the macOS Keychain" if sys.platform == "darwin" else "Windows Credential Manager"
+
 
 def _open_url(url: str):
-    """Opens a link in the default browser. os.startfile is Windows' own "open this"; webbrowser can fail silently
-    inside the packaged .exe."""
-    import os
-    try:
-        os.startfile(url)
-    except OSError:
-        webbrowser.open(url)
+    """Opens a link in the default browser. Through the system's own "open this" (os.startfile / open): webbrowser
+    can fail silently inside the packaged app."""
+    core.open_path(url)
 
 
 def _guide_path() -> Path:

@@ -17,6 +17,7 @@ on reboot, so it's woken straight after the probe.
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 import json
 import hashlib
@@ -33,7 +34,55 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+import serial
 import serial.tools.list_ports
+
+
+def _serial_like_windows():
+    """Makes serial ports on macOS / Linux behave as the app expects from Windows:
+
+    - Exclusive: Windows lets only one program open a port; macOS and Linux let several, and then they steal each
+      other's bytes. Every open asks for an exclusive lock, so a busy port fails to open here too (the Diagnostics,
+      Console and Controller tabs, a scan and a flash all rely on that). esptool asks for it itself.
+    - No reset on open: opening a port raises DTR and RTS together (harmless), then pyserial drops DTR before RTS.
+      In between, RTS up + DTR down is the ESP32's reset signal - the board reboots, and the robot, booting
+      without its power button held, switches itself off. So when both are wanted low, RTS goes first
+      (DTR up + RTS down resets nothing). Windows doesn't raise them on open.
+    """
+    if sys.platform == "win32" or getattr(serial.Serial, "_hop_patched", False):
+        return
+    orig_init = serial.Serial.__init__
+    orig_open = serial.Serial.open
+    orig_dtr = serial.Serial._update_dtr_state
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("exclusive", True)
+        orig_init(self, *args, **kwargs)
+
+    def _update_dtr_state(self):
+        if not getattr(self, "_hop_opening", False):
+            orig_dtr(self)
+
+    def open(self):
+        self._hop_opening = not self._dtr_state  # DTR low: hold it back until RTS is set
+        try:
+            orig_open(self)
+        finally:
+            held, self._hop_opening = self._hop_opening, False
+        if held and self.is_open and not self._dsrdtr:
+            try:
+                orig_dtr(self)
+            except OSError as e:  # like pyserial's open(): a port without modem lines (a pty) is fine
+                if e.errno not in (errno.EINVAL, errno.ENOTTY):
+                    raise
+
+    serial.Serial.__init__ = __init__
+    serial.Serial.open = open
+    serial.Serial._update_dtr_state = _update_dtr_state
+    serial.Serial._hop_patched = True
+
+
+_serial_like_windows()
 
 ESPRESSIF_VID = 0x303A
 # USB-serial bridges commonly used on ESP32 boards, for nicer labels
@@ -41,15 +90,29 @@ BRIDGES = {0x303A: "ESP32 native USB", 0x1A86: "CH34x", 0x10C4: "CP210x", 0x0403
 MiB = 1024 * 1024
 
 APP_NAME = "DimensionHopper"
-APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP_NAME
+
+
+def _app_dir() -> Path:
+    """Where settings, downloads and backups live: %LOCALAPPDATA% on Windows, Application Support on a Mac."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP_NAME
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / APP_NAME
+
+
+APP_DIR = _app_dir()
 CACHE_DIR = APP_DIR / "cache"
 BACKUP_DIR = APP_DIR / "backups"
 CONFIG_PATH = APP_DIR / "config.json"
 
 
 def short_path(path) -> str:
-    """A path for the screen and logs without the Windows user name in it (people post screenshots)."""
+    """A path for the screen and logs without the user name in it (people post screenshots)."""
     text = str(path)
+    if sys.platform != "win32":
+        home = str(Path.home())
+        return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text
     for var in ("LOCALAPPDATA", "APPDATA", "USERPROFILE"):
         base = os.environ.get(var)
         if base and text.lower().startswith(base.lower()):
@@ -164,7 +227,8 @@ _PCT = re.compile(r"\((\d{1,3}) ?%\)")
 
 
 class _LineSink(io.TextIOBase):
-    """stdout replacement that splits esptool's \\r progress updates into separate lines."""
+    """stdout replacement that splits esptool's progress updates into separate lines: \\r for writes, backspaces
+    for read_flash (a backup), which otherwise pile up unseen until the read ends."""
 
     def __init__(self, on_line: Callable[[str], None]):
         self.on_line = on_line
@@ -173,7 +237,7 @@ class _LineSink(io.TextIOBase):
     def write(self, s: str) -> int:
         self.buf += s
         while True:
-            m = re.search(r"[\r\n]", self.buf)
+            m = re.search(r"[\r\n\b]+", self.buf)
             if not m:
                 break
             line, self.buf = self.buf[: m.start()], self.buf[m.end():]
@@ -225,8 +289,25 @@ def run_esptool(args: list[str], on_line: Callable[[str], None] = lambda s: None
     return "\n".join(out)
 
 
+MAC_CH34X_MAX_BAUD = 115200
+
+
+def port_baud(port: str, baud: int) -> int:
+    """The flashing speed to use on a port. macOS's own driver for the CH34x USB bridge (the robot's and the
+    controller's, /dev/cu.usbserial-*) garbles what the board sends back at anything above 115200 baud
+    ("Invalid head of packet", "Corrupt data" - measured: 230400 lost bytes within 64 KB), so a Mac uses 115200
+    there: a full 16 MB backup takes ~25 minutes instead of ~3. WCH's own driver (/dev/cu.wchusbserial*) and
+    Windows manage 921600."""
+    if sys.platform != "darwin" or baud <= MAC_CH34X_MAX_BAUD or "wchusbserial" in port:
+        return baud
+    for p in serial.tools.list_ports.comports():
+        if p.device == port and p.vid == 0x1A86:
+            return MAC_CH34X_MAX_BAUD
+    return baud
+
+
 def _base_args(port: str, baud: int) -> list[str]:
-    return ["--chip", "esp32s3", "--port", port, "--baud", str(baud)]
+    return ["--chip", "esp32s3", "--port", port, "--baud", str(port_baud(port, baud))]
 
 
 def port_exists(port: str) -> bool:
@@ -462,7 +543,7 @@ def find_fork_build(kind: str = "bot") -> Optional[Path]:
     """
     robot_root = None
     for start in (Path(sys.executable), Path(__file__)):
-        for parent in list(Path(os.path.abspath(start)).parents)[:5]:
+        for parent in list(Path(os.path.abspath(start)).parents)[:8]:  # a Mac app sits deeper (.app/Contents/MacOS)
             if (parent / "main").is_dir() and (parent / "tools" / "updater").is_dir():
                 robot_root = parent
                 break
@@ -563,12 +644,71 @@ def check_plan_fits(plan: FlashPlan, target: str, flash_bytes: int):
 def backup(port: str, flash_bytes: int, target: str, baud: int, on_line, on_progress) -> Path:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest = BACKUP_DIR / f"{Kind.LABEL[target]}-{port}-{stamp}.bin"
-    run_esptool(_base_args(port, baud) + ["--after", "no_reset", "read_flash", "0", hex(flash_bytes), str(dest)],
-                on_line, on_progress)
+    # the port's own name: "COM7", or "cu.usbserial-110" from /dev/cu.usbserial-110 (no slashes in a file name)
+    dest = BACKUP_DIR / f"{Kind.LABEL[target]}-{os.path.basename(port)}-{stamp}.bin"
+    if sys.platform == "win32":
+        run_esptool(_base_args(port, baud) + ["--after", "no_reset", "read_flash", "0", hex(flash_bytes), str(dest)],
+                    on_line, on_progress)
+    else:
+        _backup_in_pieces(port, flash_bytes, baud, dest, on_line, on_progress)
     if not dest.exists() or dest.stat().st_size != flash_bytes:
         raise EsptoolError("Backup came back short - not flashing without a good backup")
     return dest
+
+
+BACKUP_PIECE = 0x40000   # 256 KB
+BACKUP_TRIES = 4         # per piece, before giving up
+
+
+def _backup_in_pieces(port: str, flash_bytes: int, baud: int, dest: Path, on_line, on_progress):
+    """read_flash, but in 256 KB pieces, each checked against the MD5 the chip computes of it, and a bad piece read
+    again. macOS's own CH34x driver now and then drops a few bytes of what the board sends (measured: once every
+    few MB, even at 115200 baud), and a single 16 MB read_flash fails on the first one - after up to 25 minutes.
+    Leaves the board in the bootloader, like read_flash --after no_reset."""
+    import esptool
+    from esptool.cmds import detect_chip
+
+    sink = _LineSink(on_line)
+    data = bytearray()
+    esp = None
+    tries = 0
+
+    def drop():
+        try:
+            esp._port.close()  # noqa: SLF001 - esptool has no public close
+        except Exception:
+            pass
+
+    with _esptool_lock, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        try:
+            while len(data) < flash_bytes:
+                addr = len(data)
+                size = min(BACKUP_PIECE, flash_bytes - addr)
+                try:
+                    if esp is None:
+                        esp = detect_chip(port, 115200, "default_reset")
+                        esp = esp.run_stub()
+                        esp.change_baud(port_baud(port, baud))
+                        esp.flash_set_parameters(flash_bytes)
+                    piece = esp.read_flash(addr, size)
+                    if len(piece) != size or hashlib.md5(piece).hexdigest() != esp.flash_md5sum(addr, size):
+                        raise esptool.FatalError("the piece read doesn't match the chip's checksum")
+                except (esptool.FatalError, serial.SerialException, OSError) as e:
+                    tries += 1
+                    if tries >= BACKUP_TRIES or not port_exists(port):  # gone = unplugged / switched off
+                        raise EsptoolError(f"Backup failed at {addr:#x} after {tries} tries: {e}") from None
+                    on_line(f"Reading at {addr:#x} went wrong ({e}) - reconnecting and reading it again")
+                    drop()
+                    esp = None
+                    continue
+                tries = 0
+                data += piece
+                on_progress(len(data) * 100 // flash_bytes)
+        finally:
+            sink.write("\n")
+            if esp is not None:
+                drop()
+    dest.write_bytes(bytes(data))
 
 
 def write(port: str, plan: FlashPlan, baud: int, on_line, on_progress):
@@ -680,7 +820,7 @@ def smart_write(port: str, plan: FlashPlan, baud: int, flash_bytes: int, keep_pa
         try:
             esp = detect_chip(port, 115200, "default_reset")
             esp = esp.run_stub()
-            esp.change_baud(baud)
+            esp.change_baud(port_baud(port, baud))
             esp.flash_set_parameters(flash_bytes)
 
             if keep_pairing:
@@ -1012,8 +1152,25 @@ def save_config(cfg: dict) -> bool:
 
 def open_folder(path: Path):
     path.mkdir(parents=True, exist_ok=True)
-    if sys.platform == "win32":
-        os.startfile(str(path))  # noqa: S606 - opening our own data folder in Explorer
+    open_path(path)
+
+
+def open_path(target) -> None:
+    """Opens a folder, file or link with whatever the system uses for it (Explorer / Finder / the browser)."""
+    import subprocess
+    target = str(target)
+    try:
+        if sys.platform == "win32":
+            os.startfile(target)  # noqa: S606 - our own data folder, or a link we made
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", target], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["xdg-open", target], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    except OSError:
+        import webbrowser
+        webbrowser.open(target)
 
 
 

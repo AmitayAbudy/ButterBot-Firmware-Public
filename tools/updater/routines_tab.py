@@ -20,6 +20,7 @@ import controller_link
 import hopper_core as core
 import phonemes
 from console_tab import FUZZY_AMB_RE, FUZZY_NO_RE, FUZZY_OK_RE, TIMEOUT_RE, TOP_RE
+import mac_compat
 import tooltip
 
 MAX_ROUTINES = 12
@@ -180,7 +181,7 @@ class RoutinesTab(tk.Frame):
 
         def wheel(e):
             if canvas.yview() != (0.0, 1.0):
-                canvas.yview_scroll(int(-e.delta / 120), "units")
+                canvas.yview_scroll(mac_compat.wheel_steps(e), "units")
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", wheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         self.left = tk.Frame(cols, bg=p["BG"])
