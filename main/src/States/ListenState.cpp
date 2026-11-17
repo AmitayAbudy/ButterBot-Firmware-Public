@@ -1,6 +1,7 @@
 #include "Routines/UserRoutine.h"
 #include "Services/UserData.h"
 #include "Services/Conversation.h"
+#include "Services/Personal.h"
 #include <esp_heap_caps.h>
 #include "ListenState.h"
 #include "BBStateMachine.h"
@@ -15,6 +16,7 @@
 #include <Services/Audio/Audio.h>
 #include <Services/Audio/AACAudioGenerator.h>
 #include "Audio/MemoryAudioSource.h"
+#include "Audio/Beeps.h"
 #include "Util/PSRAMAllocator.h"
 #include <algorithm>
 #include <cstdlib>
@@ -160,7 +162,14 @@ namespace {
             return;
         }
 
-        const StartPrompt& prompt = StartPrompts[rand() % std::size(StartPrompts)];
+        StartPrompt prompt = StartPrompts[rand() % std::size(StartPrompts)];
+        // Fork: the owner's own "I'm listening" line (Personalize > Summon, "is tapped"). Its length is estimated
+        // from the stock prompts (~75 ms per character with the stock voice); Personalize keeps these lines short.
+        const std::string own = spoken ? Personal::summonText(Personal::SummonMoment::Listen) : std::string();
+        if(!own.empty()){
+            prompt.text = own.c_str();
+            prompt.durationMs = static_cast<uint16_t>(std::min<size_t>(own.size() * 75 + 150, IntroWindowMs));
+        }
         // Fork: durations were measured with the stock voice; a faster/slower voice preset scales them, and the
         // prompt must still end when the recogniser is ready.
         const uint32_t promptMs = static_cast<uint32_t>(prompt.durationMs * Voice::stretch() / Voice::StockStretch);
@@ -241,6 +250,7 @@ struct ListenState::AiSession {
 	bool wifiAfterRecording = false;
 	uint32_t heardAt = 0;       // when "Heard" went to the controller
 	bool thinkingShown = false; // "Thinking" sent
+	uint32_t blipAt = 0;        // last "still thinking" beep
 };
 
 namespace {
@@ -308,7 +318,8 @@ namespace {
 						s->reply.error = "heard_nothing";
 					}else{
 						MemMark::mark("ai: sending");
-						s->reply = BrainLink::converse(s->ip, s->port, s->rec->pcm.data(), s->rec->pcm.size(), s->voice, 25000);
+						// canLook: the brain may ask for a photo ("what do you see?"); the camera is free while listening
+						s->reply = BrainLink::converse(s->ip, s->port, s->rec->pcm.data(), s->rec->pcm.size(), s->voice, 25000, true);
 					}
 					s->replied = true;
 				}
@@ -551,6 +562,9 @@ ListenState::~ListenState(){
     }
 }
 
+// Fork: how often the "still thinking" blip plays while the brain works on an answer
+static constexpr uint32_t ThinkingBlipMs = 2200;
+
 int64_t ListenState::getDynamicTickInterval() const{
     return ai ? 50 : -1;
 }
@@ -574,11 +588,20 @@ void ListenState::tick(float){
         ai->recordingStopped = true; // after the unload: a worker waiting for it starts WiFi now
         printf("[BBAI] event=recorded ms=%u speech=%d\n", (unsigned) (ai->rec->pcm.size() / 16), ai->rec->heardSpeech ? 1 : 0);
         MemMark::mark("ai: recorded");
+        if(ai->rec->heardSpeech){
+            // Fork: a chirp so you know it heard you (Personalize: "beeps"); soft blips follow until the answer
+            Beeps::heard(app->getService<Audio>());
+            ai->blipAt = millis();
+        }
         if(com != nullptr && ai->rec->heardSpeech){
             ListenData listenData{.phase = ListenData::Phase::Heard};
             com->sendData(BB::State::Listen, BB::Action::Listen{}, listenData);
             ai->heardAt = millis();
         }
+    }
+    if(ai->blipAt != 0 && !ai->replied && millis() - ai->blipAt >= ThinkingBlipMs){
+        ai->blipAt = millis();
+        Beeps::thinking(app->getService<Audio>());
     }
     // Controller: "Heard" for a moment, then "Thinking" while the PC works (once the robot is talking to it)
     if(ai->heardAt != 0 && !ai->thinkingShown && ai->link == 1 && millis() - ai->heardAt >= 1200 && com != nullptr){
@@ -591,7 +614,7 @@ void ListenState::tick(float){
     }
     ai->handled = true;
     const BrainLink::Reply& r = ai->reply;
-    printf("[BBAI] event=reply ok=%d error=%s\n", r.ok ? 1 : 0, r.error.empty() ? "none" : r.error.c_str());
+    printf("[BBAI] event=reply ok=%d error=%s looked=%d\n", r.ok ? 1 : 0, r.error.empty() ? "none" : r.error.c_str(), r.looked ? 1 : 0);
     if(r.ok) HomeWiFi::setLastProblem("none");
     if(!r.heard.empty()) printf("BBAI heard: %s\n", r.heard.c_str());
     if(!r.say.empty()) printf("BBAI says: %s\n", r.say.c_str());

@@ -499,6 +499,13 @@ private:
 						printStartLine();
 					});
 					else if(line == "chat") printChat();
+					else if(line == "summon") printSummon();
+					else if(line.rfind("summon set ", 0) == 0) runFlashJob([args = line.substr(11)]{ setSummon(args); });
+					else if(line == "cue") printCue();
+					else if(line.rfind("cue set ", 0) == 0) runFlashJob([on = line.substr(8)]{
+						Personal::setCue(on != "0");
+						printCue();
+					});
 					else if(line == "clock") printClock();
 					else if(line.rfind("clock set ", 0) == 0) runFlashJob([this, t = line.substr(10)]{ setClock(t); });
 					else if(line == "rout") printRoutines();
@@ -838,6 +845,43 @@ private:
 		}
 		Personal::setChat((size_t) index, hex == "-" ? std::string() : fromHex(hex.c_str(), hex.size()));
 		printChat();
+	}
+
+	/*
+	 * Fork: the owner's Summon lines and the heard/thinking beeps (Personalize tab).
+	 * "summon" / "summon set <index> <hex|->" -> [BBSUMMON] count=<moments> d=<index>:<hex>,... ("-" if none)
+	 *   index: 0 starts searching, 1 found you, 2 couldn't find you, 3 charging, 4 tapped (before a voice command); "|" separates alternatives
+	 * "cue" / "cue set <0|1>" -> [BBCUE] on=<0|1>
+	 */
+	static void printSummon(){
+		std::string all;
+		for(size_t i = 0; i < (size_t) Personal::SummonMoment::Count; ++i){
+			std::string lines;
+			{
+				std::lock_guard<std::mutex> g(Personal::lock);
+				lines = Personal::summonLines[i];
+			}
+			if(lines.empty()) continue;
+			if(!all.empty()) all += ',';
+			all += std::to_string(i) + ":" + toHex(lines);
+		}
+		printf("[BBSUMMON] count=%u d=%s\n", (unsigned) Personal::SummonMoment::Count, all.empty() ? "-" : all.c_str());
+	}
+
+	static void setSummon(const std::string& args){
+		const size_t sp = args.find(' ');
+		const int index = atoi(args.c_str());
+		const std::string hex = sp == std::string::npos ? "-" : args.substr(sp + 1);
+		if(index < 0 || index >= (int) Personal::SummonMoment::Count){
+			printf("[BBSUMMON] result=error why=bad_index\n");
+			return;
+		}
+		Personal::setSummon((size_t) index, hex == "-" ? std::string() : fromHex(hex.c_str(), hex.size()));
+		printSummon();
+	}
+
+	static void printCue(){
+		printf("[BBCUE] on=%d\n", Personal::cueOn ? 1 : 0);
 	}
 
 	/*

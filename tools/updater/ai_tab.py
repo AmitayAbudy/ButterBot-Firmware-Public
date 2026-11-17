@@ -119,7 +119,14 @@ class AITab(tk.Frame):
             self.turns.heading(c, text=t, anchor="w")
             self.turns.column(c, width=w, anchor="w", stretch=c in ("heard", "reply"))
         self.turns.tag_configure("bad", foreground=p["BAD"])
-        self.turns.pack(fill="both", expand=True, padx=8, pady=6)
+        # The last photo the AI asked for ("what do you see?"), shown only here - it isn't saved anywhere
+        self.photo_box = tk.Frame(logf, bg=p["PANEL"])
+        self.photo_label = tk.Label(self.photo_box, bg=p["PANEL"])
+        self.photo_label.pack(padx=(0, 8), pady=(6, 0))
+        tk.Label(self.photo_box, text="What it last saw", bg=p["PANEL"], fg=p["DIM"],
+                 font=("Segoe UI", 8)).pack(padx=(0, 8))
+        self._photo_img = None
+        self.turns.pack(side="left", fill="both", expand=True, padx=8, pady=6)
 
         self.refresh_ports()
         self._refresh_thinking_state()
@@ -676,6 +683,8 @@ class AITab(tk.Frame):
     def check_ollama(self):
         def work():
             models = brain.ollama_models()
+            # Models that can see a photo ("What do you see?"); the chosen one doesn't have to be one of them
+            seeing = [m for m in models or [] if "vision" in brain.ollama_capabilities("http://localhost:11434", m)]
             def ui():
                 if models is None:
                     self._say(self.think_status, self.think_lamp, "Ollama isn't running. Install it from ollama.com "
@@ -687,7 +696,10 @@ class AITab(tk.Frame):
                     self.ollama_box.configure(values=models)
                     if self.ollama_var.get() not in models:
                         self.ollama_var.set(models[0])
-                    self._say(self.think_status, self.think_lamp, f"Ollama ready: {', '.join(models[:6])}", "ok")
+                    sight = (f" Sees with: {seeing[0]}." if seeing else
+                             " To let it see (\"What do you see?\"), also run:  ollama pull gemma3:4b")
+                    self._say(self.think_status, self.think_lamp, f"Ollama ready: {', '.join(models[:6])}.{sight}",
+                              "ok")
             self.app.ui(ui)
         threading.Thread(target=work, daemon=True).start()
 
@@ -908,10 +920,15 @@ class AITab(tk.Frame):
             self.add_memories(value)
         elif kind == "robot":
             self.run_status.configure(text=f"Brain running on {brain.local_ip()}:{brain.TALK_PORT} · robot seen at {value}")
+        elif kind == "photo":
+            self._show_photo(value)
         elif kind == "turn":
             t: brain.Turn = value
+            said = t.error or t.say
+            if t.looked:  # it took a photo for this answer (or tried to)
+                said = (f"[looked, {t.look_s:.1f} s] " if "x" in t.looked else f"[couldn't look: {t.looked}] ") + said
             self.turns.insert("", "end", values=(time.strftime("%H:%M:%S"), t.heard or "(nothing)",
-                                                 t.error or t.say, t.action, f"{t.upload_s:.1f}", f"{t.hear_s:.1f}",
+                                                 said, t.action, f"{t.upload_s:.1f}", f"{t.hear_s:.1f}",
                                                  f"{t.think_s:.1f}", f"{t.seconds:.1f}"),
                               tags=("bad",) if t.error else ())
             self.turns.see(self.turns.get_children()[-1])
@@ -923,6 +940,19 @@ class AITab(tk.Frame):
                 self.auto_var.set(True)
                 self._say(self.run_status, self.run_lamp, "Setup complete - from now on AI conversations start by "
                           "themselves when Dimension Hopper opens (untick the box above to change that).", "ok")
+
+    def _show_photo(self, jpeg: bytes):
+        try:
+            import io
+            from PIL import Image, ImageTk
+            img = Image.open(io.BytesIO(jpeg))
+            img.thumbnail((160, 120))
+            self._photo_img = ImageTk.PhotoImage(img)  # keep a reference, or Tk drops the picture
+        except Exception:  # noqa: BLE001 - a picture that won't open just isn't shown
+            return
+        self.photo_label.configure(image=self._photo_img)
+        if not self.photo_box.winfo_ismapped():
+            self.photo_box.pack(side="right", anchor="n", before=self.turns)
 
     def _show_help(self):
         p = self.pal

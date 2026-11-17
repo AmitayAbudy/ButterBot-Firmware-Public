@@ -57,6 +57,12 @@ def collect(bot: str | None, ctrl: str | None, cfg: dict, app_version: str,
             r["start_line"] = _unhex((ask(bot, "startline", "BBSTART") or {}).get("d"))
             ch = (ask(bot, "chat", "BBCHAT") or {}).get("d", "-")
             r["chat"] = {i.split(":", 1)[0]: _unhex(i.split(":", 1)[1]) for i in ch.split(",") if ":" in i}
+            sm = ask(bot, "summon", "BBSUMMON")  # Summon lines and beeps: robots from 1.1.1-exadon.9 on
+            if sm and "d" in sm:
+                r["summon"] = {i.split(":", 1)[0]: _unhex(i.split(":", 1)[1]) for i in sm["d"].split(",") if ":" in i}
+            cue = ask(bot, "cue", "BBCUE")
+            if cue and "on" in cue:
+                r["beeps"] = cue["on"] != "0"
             progress("Reading the robot's routines…")
             rt = ask(bot, "rout", "BBROUT")
             if rt and "max" in rt:
@@ -106,8 +112,8 @@ def has_settings(data: dict, kind: str) -> bool:
         c = data.get("controller") or {}
         return bool(c.get("theme"))
     r = data.get("robot") or {}
-    return any(r.get(k) for k in ("owner", "robot_name", "ramble", "start_line", "chat", "routines", "commands",
-                                  "schedules")) or bool(r.get("pitch") or r.get("speed")) or         bool((r.get("quiet") or {}).get("on"))
+    return any(r.get(k) for k in ("owner", "robot_name", "ramble", "start_line", "chat", "summon", "routines",
+                                  "commands", "schedules")) or r.get("beeps") is False or bool(r.get("pitch") or r.get("speed")) or         bool((r.get("quiet") or {}).get("on"))
 
 
 def auto_save(data: dict, kind: str) -> Path:
@@ -188,6 +194,17 @@ def restore(data: dict, bot: str | None, ctrl: str | None, cfg: dict,
         chat = r.get("chat", {})
         for i in sorted(have | set(chat), key=int):
             do(bot, f"chat set {i} {_hex(chat.get(i, ''))}", "BBCHAT", "chat replies")
+        if "summon" in r or "beeps" in r:  # backups from before 1.1.1-exadon.9 don't have them: leave the robot's
+            now = core.console_command(bot, "summon", "BBSUMMON", timeout_s=5)
+            if not now or "d" not in now:
+                failed.append("Summon lines and beeps (update the robot's firmware first)")
+            else:
+                have = {i.split(":", 1)[0] for i in now["d"].split(",") if ":" in i}
+                summon = r.get("summon", {})
+                for i in sorted(have | set(summon), key=int):
+                    do(bot, f"summon set {i} {_hex(summon.get(i, ''))}", "BBSUMMON", "Summon lines")
+                if "beeps" in r:
+                    do(bot, f"cue set {1 if r['beeps'] else 0}", "BBCUE", "beeps")
         if "routines" in r:
             progress("Restoring the routines…")
             rt = core.console_command(bot, "rout", "BBROUT", timeout_s=5)

@@ -98,7 +98,7 @@ class PersonalizeTab(tk.Frame):
         self.ctrl_lbl.grid(row=1, column=1, sticky="w")
 
         # One notice for the whole tab (not one per card) while the robot hasn't answered
-        self.need_lbl = tk.Label(self, text="🔒  Voice, start-up line, ramble lines and chat replies need the robot:"
+        self.need_lbl = tk.Label(self, text="🔒  Voice, start-up line, ramble lines, chat replies and Summon need the robot:"
                                  " plug it in by USB, switch it on and hit Scan at the top.",
                                  bg=p["PANEL_HI"], fg=p["WARN"], font=("Segoe UI Semibold", 9),
                                  anchor="w", padx=10, pady=5)
@@ -206,6 +206,7 @@ class PersonalizeTab(tk.Frame):
         self._build_theme()
         self._build_rambles()
         self._build_chat()
+        self._build_summon()
         self._build_personality()
         self.theme_card._gate = tk.Label(self.theme_card, text="🔒  Needs the controller - plug it in by USB, "
                                          "switch it on and hit Scan at the top.", bg=p["PANEL"], fg=p["WARN"],
@@ -266,7 +267,7 @@ class PersonalizeTab(tk.Frame):
                 gate.pack(anchor="w", padx=12, pady=(0, 8), before=card.winfo_children()[1])
 
     def _gate_all(self):
-        for c in (self.voice_card, self.start_card, self.ramble_card, self.chat_card):
+        for c in (self.voice_card, self.start_card, self.ramble_card, self.chat_card, self.summon_card):
             self._gate(c, self.robot_ok)
         if hasattr(self, "lock_lbl"):
             self._apply_lock()
@@ -390,7 +391,7 @@ class PersonalizeTab(tk.Frame):
     def read_voice(self):
         """Read everything the robot keeps: voice, names, ramble lines."""
         def done(r):
-            v, names, rambles, start, chat = (r + [None] * 5)[:5]
+            v, names, rambles, start, chat, summon, cue = (r + [None] * 7)[:7]
             self._robot_answered(bool(v and "preset" in v))
             if v and "preset" in v:
                 self.port_lbl.configure(text=f"Robot found on {self.port_var.get().split(' ', 1)[0]}.",
@@ -405,8 +406,10 @@ class PersonalizeTab(tk.Frame):
             self._rambles_reply(rambles)
             self._start_reply(start)
             self._chat_reply(chat)
+            self._summon_reply(summon)
+            self._cue_reply(cue)
         self._cmd([("voice", "BBVOICE"), ("names", "BBNAMES"), ("ramble", "BBRAMBLE"), ("startline", "BBSTART"),
-                   ("chat", "BBCHAT")], done)
+                   ("chat", "BBCHAT"), ("summon", "BBSUMMON"), ("cue", "BBCUE")], done)
 
     def _tune_reply(self, v):
         if v and "pitch" in v:
@@ -666,6 +669,135 @@ class PersonalizeTab(tk.Frame):
         i = self._chat_index()
         line = " ".join(self.chat_text.get().split()) or CHAT_LINES[i][1]
         self._cmd([("say " + line, "BBVOICE")], lambda r: self._say_to(self.chat_lbl, r[0]))
+
+    # --- Summon lines and the heard/thinking beeps ----------------------------------------------------------------
+    # The moments, in the robot's order ("summon set <index>"), with its stock lines (Phrases.cpp)
+    SUMMON_MOMENTS = [
+        ("starts searching", ["Searching for owner", "Beginning search",
+                              "Initiating search. I will attempt to locate you with reasonable confidence"]),
+        ("finds you", ["There you are. I am glad I found you", "Hello", "There you are. Things feel more certain now",
+                       "I have found you. That is... good"]),
+        ("can't find you", ["I cannot find you", "I was unable to locate you. I will keep looking later",
+                            "I searched, but you were not present. That is... disappointing"]),
+        ("is charging", ["I cannot come to you while I am charging",
+                         "Movement is not possible while charging. Disconnect me and I will begin the search"]),
+        ("is tapped (voice command)", ["Yes?", "I'm listening", "How can I help?", "Another task?",
+                                       "How may I assist?", "You have my attention", "Awaiting input",
+                                       "State your request"]),
+    ]
+    LISTEN_MOMENT = 4      # its line plays while the robot gets ready to listen: it has to be short
+    LISTEN_MAX_CHARS = 35  # ~2.6 s with the stock voice; the robot starts listening ~3 s after the tap
+
+    def _build_summon(self):
+        p = self.pal
+        card = self.summon_card = self._card(self.right, "SUMMON", "What the robot says when you hold Summon (it comes "
+                                                                   "to find you) or tap it (it listens for a voice "
+                                                                   "command). Separate a few lines with | and it picks "
+                                                                   "one each time. {name} becomes your name. Empty = "
+                                                                   "the stock lines.")
+        self.summon_own: dict[int, str] = {}
+        row = tk.Frame(card, bg=p["PANEL"])
+        row.pack(fill="x", padx=12)
+        tk.Label(row, text="When it", bg=p["PANEL"], fg=p["TEXT"], font=("Segoe UI Semibold", 9)).pack(side="left")
+        self.summon_var = tk.StringVar()
+        self.summon_box = ttk.Combobox(row, textvariable=self.summon_var, state="readonly", style="Hop.TCombobox",
+                                       width=28)
+        self.summon_box.pack(side="left", padx=8)
+        self.summon_box.bind("<<ComboboxSelected>>", lambda e: self._summon_show())
+        self.summon_stock = tk.Label(card, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), wraplength=470,
+                                     justify="left")
+        self.summon_stock.pack(anchor="w", padx=12, pady=(4, 2))
+        self.summon_text = tk.StringVar()
+        self._entry(card, self.summon_text, width=62).pack(anchor="w", padx=12)
+        bottom = tk.Frame(card, bg=p["PANEL"])
+        bottom.pack(fill="x", padx=12, pady=(6, 4))
+        self.app.button(bottom, "Save lines", self.save_summon, small=True).pack(side="left")
+        self.app.button(bottom, "▶ Hear one", self.hear_summon, small=True).pack(side="left", padx=6)
+        self.app.button(bottom, "Use the stock lines", lambda: (self.summon_text.set(""), self.save_summon()),
+                        small=True).pack(side="left")
+        self.summon_lbl = tk.Label(bottom, text="", bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8))
+        self.summon_lbl.pack(side="left", padx=10)
+        # The AI listen's beeps live here too: they're about what the robot sounds like
+        cue = tk.Frame(card, bg=p["PANEL"])
+        cue.pack(fill="x", padx=12, pady=(4, 10))
+        self.cue_var = tk.BooleanVar(value=True)
+        cb = tk.Checkbutton(cue, text="Beep when it has heard an AI question, and softly while it thinks",
+                            variable=self.cue_var, command=self.save_cue, bg=p["PANEL"], fg=p["TEXT"],
+                            selectcolor=p["PANEL_HI"], activebackground=p["PANEL"], activeforeground=p["TEXT"],
+                            font=("Segoe UI", 9), bd=0, highlightthickness=0)
+        cb.pack(side="left")
+        tooltip.Tooltip(cb, "A quick chirp the moment it stops listening, then a soft blip every couple of seconds "
+                            "until the answer comes. Saved on the robot.")
+        self._summon_fill(0)
+
+    def _summon_index(self) -> int:
+        vals = list(self.summon_box.cget("values"))
+        return vals.index(self.summon_var.get()) if self.summon_var.get() in vals else 0
+
+    def _summon_fill(self, select: int):
+        self.summon_box.configure(values=[("✎ " if i in self.summon_own else "") + name
+                                          for i, (name, _) in enumerate(self.SUMMON_MOMENTS)])
+        self.summon_box.current(select)
+        self._summon_show()
+
+    def _summon_show(self):
+        i = self._summon_index()
+        short = (f" Keep each line under {self.LISTEN_MAX_CHARS} characters: it's said while the robot gets ready to "
+                 "listen." if i == self.LISTEN_MOMENT else "")
+        self.summon_stock.configure(text="Stock lines: " + " / ".join(f'"{s}"' for s in self.SUMMON_MOMENTS[i][1])
+                                    + short)
+        self.summon_text.set(self.summon_own.get(i, ""))
+
+    def _summon_reply(self, r, saved: bool = False):
+        if not r or "d" not in r:
+            return
+        own = {}
+        for item in r.get("d", "-").split(","):
+            if ":" in item:
+                i, h = item.split(":", 1)
+                if i.isdigit() and int(i) < len(self.SUMMON_MOMENTS):
+                    own[int(i)] = self._unhex(h)
+        self.summon_own = own
+        self._summon_fill(self._summon_index())
+        self.summon_lbl.configure(text=("Saved. " if saved else "") +
+                                  (f"Your lines for {len(own)} of {len(self.SUMMON_MOMENTS)} moments." if own
+                                   else "Using the stock lines."), fg=self.pal["GREEN"] if saved else self.pal["DIM"])
+
+    def save_summon(self):
+        i = self._summon_index()
+        parts = [" ".join(s.split())[:100] for s in self.summon_text.get().split("|")]
+        if i == self.LISTEN_MOMENT:
+            long = [s for s in parts if len(s.replace("{name}", "x" * 8)) > self.LISTEN_MAX_CHARS]
+            if long:
+                self.summon_lbl.configure(text=f'Too long to say before it listens: "{long[0][:30]}…" - keep each '
+                                               f"under {self.LISTEN_MAX_CHARS} characters.", fg=self.pal["WARN"])
+                return
+        text = " | ".join(s for s in parts if s)[:200]
+        self.summon_lbl.configure(text="Saving on the robot…", fg=self.pal["DIM"])
+        self._cmd([(f"summon set {i} {self._hex(text)}", "BBSUMMON")],
+                  lambda r: self._summon_reply(r[0], saved=True) if r[0] and "d" in r[0] else
+                  self.summon_lbl.configure(text="No answer - the robot needs this release's firmware.",
+                                            fg=self.pal["WARN"]))
+
+    def hear_summon(self):
+        import random
+        i = self._summon_index()
+        mine = [s.strip() for s in self.summon_text.get().split("|") if s.strip()]
+        line = " ".join(random.choice(mine or self.SUMMON_MOMENTS[i][1]).split())
+        line = line.replace("{name}", " ".join(self.owner_var.get().split()) or "human")
+        self._cmd([("say " + line, "BBVOICE")], lambda r: self._say_to(self.summon_lbl, r[0]))
+
+    def _cue_reply(self, r):
+        if r and "on" in r:
+            self.cue_var.set(r.get("on") != "0")
+
+    def save_cue(self):
+        on = self.cue_var.get()
+        self._cmd([(f"cue set {1 if on else 0}", "BBCUE")],
+                  lambda r: self.summon_lbl.configure(
+                      text=(f"Beeps {'on' if on else 'off'}." if r[0] and "on" in r[0] else
+                            "No answer - the robot needs this release's firmware."),
+                      fg=self.pal["GREEN"] if r[0] and "on" in r[0] else self.pal["WARN"]))
 
     # --- controller theme -------------------------------------------------------------------------------------
     def _build_theme(self):

@@ -18,6 +18,11 @@
  *     "SAY <reply to speak>"
  *     "DO <activation phrase>"            (an existing voice command to run, e.g. "do a dance")
  *     "ERR <message>"
+ *     "LOOK"                              (look=1 robots only: the AI wants to see; the robot answers on the same
+ *                                          connection "BBIMG bytes=<n> w=<px> h=<px>
+" + n bytes of JPEG, or
+ *                                          "BBIMG bytes=0 why=<reason>
+", then keeps reading reply lines)
  */
 namespace BrainLink {
 
@@ -38,9 +43,12 @@ struct Reply {
 	std::string say;
 	std::string action;
 	std::string error;
+	bool looked = false; // the brain asked for a photo
 };
 
-Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, const char* voice, uint32_t timeoutMs);
+/** canLook: the robot may take a photo if the brain asks for one (LOOK). */
+Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, const char* voice, uint32_t timeoutMs,
+               bool canLook = false);
 
 /**
  * Audio captured for one utterance. The AFE proc task appends to it; whoever started the recording waits for done.

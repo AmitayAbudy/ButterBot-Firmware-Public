@@ -13,6 +13,7 @@
 #include "Util/PSRAMAllocator.h"
 #include "BLE/ConMan.h"
 #include "Log/Log.h"
+#include "Util/Snapshot.h"
 
 DEFINE_LOG(BrainLink)
 
@@ -193,7 +194,8 @@ int64_t uploadTest(uint32_t ip, uint16_t port, uint32_t bytes, int radioMode){
 	return acked ? ms : -1;
 }
 
-Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, const char* voice, uint32_t timeoutMs){
+Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, const char* voice, uint32_t timeoutMs,
+               bool canLook){
 	Reply r;
 	const int s = connectTo(ip, port, timeoutMs);
 	if(s < 0){
@@ -213,33 +215,61 @@ Reply converse(uint32_t ip, uint16_t port, const int16_t* pcm, size_t samples, c
 	printf("[BBAI] event=shrunk ms=%u kept_ms=%u bytes=%u\n", (unsigned) (samples / 16), (unsigned) (speechSamples / 16),
 	       (unsigned) ulaw.size());
 
-	char head[160];
+	char head[176];
 	// conv=1: conversation mode, so the brain keeps the whole session as context (older brains ignore the field)
-	const int hn = snprintf(head, sizeof(head), "BBTALK 1 rate=%u fmt=ulaw bytes=%u voice=%s fw=%s conv=%d\n",
+	// look=1: the brain may ask for a photo (LOOK) before it answers
+	const int hn = snprintf(head, sizeof(head), "BBTALK 1 rate=%u fmt=ulaw bytes=%u voice=%s fw=%s conv=%d look=%d\n",
 	                        (unsigned) SendRate, (unsigned) ulaw.size(), voice, esp_app_get_description()->version,
-	                        Conversation::active() ? 1 : 0);
-	// WiFi and Bluetooth share one radio; for the upload WiFi gets priority (the controller link just slows briefly)
-	// Measured: WiFi priority is 3-4x faster than balanced; pausing BLE advertising on top didn't help
-	radioFor(1, true);
+	                        Conversation::active() ? 1 : 0, canLook ? 1 : 0);
+	// WiFi and Bluetooth share one radio. For the upload WiFi gets priority and Bluetooth advertising pauses (it comes
+	// back right after; a connected controller isn't affected). Re-measured 2026-11-16 with "wifi bench", 24 KB, signal
+	// -42 dBm: advertising on 27.9 s with stalls up to 8.7 s (packets lost while it advertises every 20 ms, then TCP
+	// waits out its retry timer); advertising paused 2.6 s.
+	radioFor(2, true);
 	const bool sent = sendAll(s, head, (size_t) hn) && sendAll(s, ulaw.data(), ulaw.size(), true);
-	radioFor(1, false);
+	radioFor(2, false);
 	if(!sent){
 		close(s);
 		r.error = "send_failed";
 		return r;
 	}
-	shutdown(s, SHUT_WR);
+	// The brain reads exactly bytes=<n>, so the upload needs no end-of-stream; without look the write side closes as before
+	if(!canLook) shutdown(s, SHUT_WR);
 
-	// Read the reply lines until the PC closes the connection
+	// Read the reply lines until the PC closes the connection. A "LOOK" line is answered right away with a photo.
 	std::string in;
 	char buf[256];
+	size_t scanned = 0;
 	for(;;){
 		const int n = recv(s, buf, sizeof(buf), 0);
 		if(n <= 0) break;
 		in.append(buf, (size_t) n);
 		if(in.size() > 4096) break;
+		while(canLook){
+			const size_t nl = in.find('\n', scanned);
+			if(nl == std::string::npos) break;
+			if(r.looked || in.compare(scanned, nl - scanned, "LOOK") != 0){
+				scanned = nl + 1;
+				continue;
+			}
+			r.looked = true;
+			in.erase(scanned, nl + 1 - scanned);
+			Snapshot::Photo photo = Snapshot::take();
+			char ih[64];
+			const int ihn = photo.jpg != nullptr
+			                ? snprintf(ih, sizeof(ih), "BBIMG bytes=%u w=%u h=%u\n", (unsigned) photo.len, (unsigned) photo.w, (unsigned) photo.h)
+			                : snprintf(ih, sizeof(ih), "BBIMG bytes=0 why=%s\n", photo.why);
+			radioFor(2, true); // as for the voice upload: advertising paused
+			const bool ok = sendAll(s, ih, (size_t) ihn) && (photo.jpg == nullptr || sendAll(s, photo.jpg, photo.len));
+			radioFor(2, false);
+			free(photo.jpg);
+			shutdown(s, SHUT_WR);
+			if(!ok) r.error = "photo_send_failed";
+		}
+		if(!r.error.empty()) break;
 	}
 	close(s);
+	if(!r.error.empty()) return r;
 
 	size_t pos = 0;
 	while(pos < in.size()){

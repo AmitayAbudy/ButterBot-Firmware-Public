@@ -38,7 +38,12 @@ runs locally: [Whisper](https://github.com/SYSTRAN/faster-whisper) turns speech 
 [Ollama](https://ollama.com) runs the AI model. Your voice never leaves your home network.
 
 - The robot records right after its prompt while WiFi connects in the background, trims the silence and sends a
-  compact 8 kHz recording; a typical answer arrives about 5 seconds after you stop talking.
+  compact 8 kHz recording; a typical answer arrives about 5 seconds after you stop talking. A quick chirp says it heard
+  you, and a soft blip every couple of seconds says it's still thinking (can be switched off).
+- **It can look**: ask "what do you see?", "what am I holding?" or "what is that?" and it takes a photo with its camera
+  and answers about what's really there. With Ollama, a small vision model (`gemma3:4b`) describes the photo and your
+  chat model answers in character; with Claude the model sees the photo itself. The photo is only used for that
+  answer - it isn't saved. Without a vision model it says it can't see instead of making something up.
 - The controller shows what's happening: *Listening*, *Heard you*, *Consulting my brain…*, then subtitles of what it
   heard and what it is saying.
 - **Conversation mode**: hold **Poke + Summon** on the controller and just keep talking - after every reply it
@@ -48,7 +53,8 @@ runs locally: [Whisper](https://github.com/SYSTRAN/faster-whisper) turns speech 
 - If the PC isn't reachable, the robot says what's wrong in plain words (WiFi not found, wrong password, brain not
   running…) and uses its built-in voice commands for the next two minutes. Nothing breaks.
 - WiFi is only switched on for a conversation and off again straight after, because it shares memory and the radio
-  with Bluetooth.
+  with Bluetooth. While it uploads, the robot pauses its Bluetooth advertising, which made uploads about ten times
+  faster. WPA2, WPA3 and WPA3-only networks all work (2.4 GHz).
 
 - Remembers past conversations (optional): a few short notes per chat, so it can ask how the maths test went. You
   can read, edit or wipe them in Dimension Hopper.

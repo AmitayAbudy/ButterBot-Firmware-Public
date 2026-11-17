@@ -6,6 +6,13 @@ The robot records what you say and sends it here (see main/src/Services/BrainLin
   2. text -> a short in-character reply, and optionally one of the robot's existing voice commands to run,
      from Claude (your own API key) or a local Ollama model (free)
   3. the reply goes back as text and the robot says it in its own voice
+Looking: we can ask the robot for one camera photo on the same connection (LOOK) and show it to the model before it
+answers. A question that is plainly about sight ("what do you see?", "what am I holding?") gets the photo up front. Claude
+sees it directly. With Ollama, a vision model (the chosen one if it can see, else an installed one such as gemma3) first
+writes a plain description of the photo, and the chosen model answers in character from that: small models told to be
+a butter robot otherwise "see" butter everywhere.
+Claude can also ask for one itself (the look tool). The photo is only used for that answer; it isn't saved or kept in
+the history. Without a photo the model is told it can't see, so it doesn't make things up.
 
 Discovery: the robot broadcasts "BBBRAIN?" on UDP DISCOVERY_PORT; we answer "BBBRAIN <tcp port>".
 """
@@ -46,8 +53,10 @@ Your words are spoken aloud by a tiny text-to-speech voice, so:
 Always say something in character - a full sentence with some attitude, never just a few words. When the person asks \
 for something one of the actions below does, also pick that action (its exact phrase); your sentence plays first, then \
 the action, so make it a quick sarcastic lead-in rather than a description of the action. If nothing fits, set action \
-to an empty string and simply answer. You can't move, see or do anything except through those actions, so never claim \
-to. Stay safe and kind under the sarcasm; this robot is often used by kids.
+to an empty string and simply answer. You can't move or do anything except through those actions, so never claim \
+to. You can only see when you're shown a photo from your camera (or when you use the look tool, if you have it): \
+without one, never describe or guess what's around you or what anyone looks like. Stay safe and kind under the \
+sarcasm; this robot is often used by kids.
 
 Examples of the tone only - never reuse these lines, and never repeat something you already said; write a fresh answer every time:
 - "Is it raining outside?" -> say "I have no windows and no hope. So, statistically, yes.", action ""
@@ -93,6 +102,7 @@ MEMORY_IN_PROMPT = 20    # the newest ones the brain sees
 HISTORY_TURNS = 4          # exchanges sent with a one-off question, so follow-ups make sense
 CONVERSATION_TURNS = 20    # in conversation mode (Poke + Summon held): most of the session
 MEMORY_GAP_S = 300       # this long without a question ends a conversation (and it gets remembered)
+WARM_EVERY_S = 30 * 60   # Ollama models are re-touched this often while the brain runs (they're kept 60 minutes)
 
 
 def build_system(settings: "BrainSettings", actions: list[dict]) -> str:
@@ -148,6 +158,8 @@ class Turn:
     think_s: float = 0.0    # Claude / Ollama
     audio_s: float = 0.0    # length of the recording that arrived
     audio_bytes: int = 0
+    looked: str = ""        # "" = no photo; else "320x240", or why there was none ("busy", ...)
+    look_s: float = 0.0     # asking the robot for the photo and receiving it
 
 
 # ---------------------------------------------------------------------------------------------
@@ -270,6 +282,42 @@ def _similar(a: str, b: str) -> bool:
     small = min(len(wa), len(wb))
     return small > 0 and len(wa & wb) >= 0.7 * small
 
+# The robot's camera, offered to Claude when the robot can take photos (it sends look=1). Used only when needed: each
+# look costs a second model call and a second or two.
+LOOK_TOOL = {
+    "name": "look",
+    "description": "Take one photo with the small camera in your face and see it. Use it only when your answer needs "
+                   "your eyes: the person asks what you see, what they're holding, showing, wearing or doing, how they "
+                   "look, to identify, describe, count or read something in front of you. Don't use it for anything "
+                   "else. The photo is small (320x240 at best) and taken from robot height, so mention it if you "
+                   "can't make something out rather than guessing. Never guess who a person is from their face.",
+    "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+}
+LOOK_LIMIT_S = 12        # waiting for the robot's photo
+# Questions that are plainly about sight: the photo is taken before the model is asked (works with any model that sees)
+VISUAL_QUESTION = re.compile(
+    r"\b(?:what|who|how many|which)\b.{0,30}\b(?:see|seeing|looking at|in front of (?:you|me))\b"
+    r"|\bcan you see\b|\bdo you see\b|\blook at (?:this|that|me|my|these|those|it)\b|\btake a look\b|\bhave a look\b"
+    r"|\bwhat(?:'s| is| am| are)\b.{0,25}\b(?:holding|wearing|showing|this(?! (?:about|for|mean|means|supposed))|these|that thing)\b"
+    r"|\bwhat colou?r\b|\bhow do (?:i|we) look\b|\bdo (?:i|we) look\b|\bdescribe (?:me|this|what|the room|my)\b"
+    r"|\bread (?:this|that|it|me (?:this|that|what))\b|\bwhat does (?:this|it|that) say\b|\bhow many fingers\b"
+    # Short pointing questions on their own: "What is that?", "And what's this one?", "What are those?"
+    r"|^\W*(?:and |so |ok(?:ay)? |hey |now )?what(?:'s| is| are)\s+(?:this|that|these|those|it)(?: one| thing| here| there)?\W*$",
+    re.IGNORECASE)
+NO_PHOTO_NOTE = ("(Your camera has no picture for you this time{why}. You can't see anything right now: say so in "
+                 "character, and don't describe or guess what's around you.)")
+PHOTO_NOTE = ("(The picture is what your camera sees right now, {w}x{h} pixels. Talk about what is really in it - "
+              "never add things you can't clearly see, butter and toast included. If it's too dark, blurry or small "
+              "to tell, say so.)")
+SEEN_NOTE = ("(You just looked with your camera. What you see, in plain words: \"{seen}\" Answer in your own voice "
+             "and attitude, as if you're looking at it yourself - one quick in-character remark about it, never a "
+             "read-out of that description. Mention only things it contains - nothing else, butter and toast "
+             "included. If it says the picture is too dark or blurry, grumble that you can't make it out.)")
+DESCRIBE_PROMPT = ("Someone asked a small robot: \"{heard}\". This photo is from the robot's camera. Describe it "
+                   "factually in at most two short sentences, focusing on what the question is about: the main things "
+                   "in it and what any person is doing or holding. Only what you can clearly see; say so if it's too "
+                   "dark or blurry. Never say who a person is. Reply with the description only.")
+
 REPLY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -337,24 +385,39 @@ class Thinker:
         except anthropic.APIStatusError as e:
             raise RuntimeError(f"Claude API error {e.status_code}: {e.message}") from None
 
+    def keep_warm(self) -> None:
+        """Resets Ollama's unload timer on the chat model and the vision model without generating anything (an
+        empty request just loads the model)."""
+        vision = ollama_vision_model(self.settings.ollama_url, self.settings.ollama_model)
+        for model in dict.fromkeys(m for m in (self.settings.ollama_model, vision) if m):
+            req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/generate",
+                                         data=json.dumps({"model": model, "keep_alive": "60m"}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                r.read()
+
     def prime(self) -> None:
         """Warms the model up with the real instructions (Ollama keeps an already-read prompt between calls).
         Not used for Claude: there it would cost a paid request, and its prompt cache warms on the first question."""
         if self.settings.provider != "ollama":
             return
-        body = {
-            "model": self.settings.ollama_model,
-            "stream": False,
-            "keep_alive": "60m",
-            "format": REPLY_SCHEMA,
-            "options": {"num_predict": 8},
-            "messages": [{"role": "system", "content": self.system + "\n\nAnswer as JSON: {\"say\": ..., \"action\": ...}"},
-                         {"role": "user", "content": "Hello?"}],
-        }
-        req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/chat",
-                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as r:
-            r.read()
+        # Also the stand-in vision model, if one answers "what do you see?": loading it cold takes longer than the
+        # robot waits for an answer (measured: 47 s for gemma3:4b)
+        vision = ollama_vision_model(self.settings.ollama_url, self.settings.ollama_model)
+        for model in dict.fromkeys(m for m in (self.settings.ollama_model, vision) if m):
+            body = {
+                "model": model,
+                "stream": False,
+                "keep_alive": "60m",
+                "format": REPLY_SCHEMA,
+                "options": {"num_predict": 8},
+                "messages": [{"role": "system", "content": self.system + "\n\nAnswer as JSON: {\"say\": ..., \"action\": ...}"},
+                             {"role": "user", "content": "Hello?"}],
+            }
+            req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/chat",
+                                         data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                r.read()
 
     def own_command(self, heard: str) -> str:
         """The owner's own voice command in what was heard, or "": every word of its phrase is there (small models
@@ -368,8 +431,11 @@ class Thinker:
                 best = phrase
         return best
 
-    def think(self, heard: str, conversation: bool = False) -> dict:
-        """conversation: the robot is in conversation mode (it sends conv=1), so more of the session goes along."""
+    def think(self, heard: str, conversation: bool = False, look: Optional[Callable[[], dict]] = None) -> dict:
+        """conversation: the robot is in conversation mode (it sends conv=1), so more of the session goes along.
+        look: takes a photo with the robot's camera ({"jpeg", "w", "h"} or {"why"}). Plainly visual questions get the
+        photo up front; otherwise Claude may ask for one itself. The result has "blind": why a visual question got no
+        photo ("" otherwise)."""
         self.conversation = conversation
         own = self.own_command(heard)
         clock = time_action(self.actions)
@@ -378,7 +444,24 @@ class Thinker:
             clean = {"say": "", "action": clock}
             self._remember(heard, clean)
             return clean
-        reply = self._claude(heard) if self.settings.provider == "claude" else self._ollama(heard)
+        photo, blind, vision_model = None, "", ""
+        if VISUAL_QUESTION.search(heard):
+            if self.settings.provider == "ollama":
+                vision_model = ollama_vision_model(self.settings.ollama_url, self.settings.ollama_model)
+            if look is None:
+                blind = "no camera on this connection"
+            elif self.settings.provider == "ollama" and not vision_model:
+                blind = "no_vision_model"
+            else:
+                photo = look()
+                if not photo.get("jpeg"):
+                    blind, photo = photo.get("why", "failed"), None
+        if self.settings.provider == "claude":
+            # Already looked (or tried): no tool this time
+            reply = self._claude(heard, None if photo or blind else look, photo, blind)
+        else:
+            seen = self._describe(vision_model, photo, heard) if photo else ""
+            reply = self._ollama(heard, seen, blind)
         say = " ".join(str(reply.get("say", "")).split())[:300]
         action = str(reply.get("action", "")).strip().lower()
         if action and action not in self.phrases:
@@ -389,7 +472,18 @@ class Thinker:
             say = ""  # the clock says the time; anything the model adds is a guess at it
         clean = {"say": say, "action": action}
         self._remember(heard, clean)
-        return clean
+        return {**clean, "blind": blind}
+
+    def _user_turn(self, heard: str, photo: Optional[dict], blind: str, seen: str = "") -> str:
+        """The question's text for the model, with a note about the photo, its description, or the lack of one."""
+        if seen:
+            return heard + "\n\n" + SEEN_NOTE.format(seen=" ".join(seen.split())[:500])
+        if photo:
+            return heard + "\n\n" + PHOTO_NOTE.format(w=photo["w"], h=photo["h"])
+        if blind:
+            why = "" if blind == "no_vision_model" else f" ({blind})"
+            return heard + "\n\n" + NO_PHOTO_NOTE.format(why=why)
+        return heard
 
     # --- memory -------------------------------------------------------------------------------
     def summarize(self, history: list[dict]) -> list[str]:
@@ -455,25 +549,60 @@ class Thinker:
             out.append(note)
         return out
 
-    def _claude(self, heard: str) -> dict:
+    def _claude(self, heard: str, look: Optional[Callable[[], dict]] = None, photo: Optional[dict] = None,
+                blind: str = "") -> dict:
         import anthropic
         key = load_api_key()
         if not key:
             raise RuntimeError("No Claude API key saved - add one in the AI tab, or switch to Ollama.")
         client = anthropic.Anthropic(api_key=key, timeout=30.0, max_retries=1)
+        messages = self._messages(self._user_turn(heard, photo, blind))
+        if photo:
+            import base64
+            messages[-1] = {"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                             "data": base64.b64encode(photo["jpeg"]).decode("ascii")}},
+                {"type": "text", "text": messages[-1]["content"]}]}
+        looked = False
         try:
-            response = client.beta.messages.create(
-                model=self.settings.claude_model,
-                max_tokens=2000,
-                # The cached part: persona + action list never change between turns
-                system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral"}}],
-                messages=self._messages(heard),
-                # A spoken one-liner: low effort keeps the robot's pause short
-                output_config={"effort": "low", "format": {"type": "json_schema", "schema": REPLY_SCHEMA}},
-                # If a safety classifier declines, retry on the fallback model the API picks
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            )
+            for _ in range(3):  # an answer, or one look and then the answer
+                extra = {"tools": [LOOK_TOOL]} if look else {}
+                response = client.beta.messages.create(
+                    model=self.settings.claude_model,
+                    max_tokens=2000,
+                    # The cached part: persona + action list never change between turns
+                    system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral"}}],
+                    messages=messages,
+                    # A spoken one-liner: low effort keeps the robot's pause short
+                    output_config={"effort": "low", "format": {"type": "json_schema", "schema": REPLY_SCHEMA}},
+                    # If a safety classifier declines, retry on the fallback model the API picks
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default",
+                    **extra,
+                )
+                calls = [b for b in response.content if b.type == "tool_use"]
+                if response.stop_reason != "tool_use" or not calls:
+                    break
+                results = []
+                for call in calls:
+                    if call.name != "look" or looked:
+                        results.append({"type": "tool_result", "tool_use_id": call.id, "is_error": True,
+                                        "content": "You already looked; answer with what you saw."})
+                        continue
+                    looked = True
+                    photo = look()
+                    if photo.get("jpeg"):
+                        import base64
+                        results.append({"type": "tool_result", "tool_use_id": call.id, "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                         "data": base64.b64encode(photo["jpeg"]).decode("ascii")}},
+                            {"type": "text", "text": f"Your camera's photo, {photo['w']}x{photo['h']}."}]})
+                    else:
+                        results.append({"type": "tool_result", "tool_use_id": call.id, "is_error": True,
+                                        "content": f"The camera couldn't take a photo ({photo.get('why', 'unknown')}). "
+                                                   "Say you can't see right now."})
+                messages = messages + [{"role": "assistant", "content": response.content},
+                                       {"role": "user", "content": results}]
         except anthropic.AuthenticationError:
             raise RuntimeError("Claude rejected the API key - check it in the AI tab.") from None
         except anthropic.PermissionDeniedError:
@@ -491,7 +620,32 @@ class Thinker:
         text = next((b.text for b in response.content if b.type == "text"), "")
         return json.loads(text) if text else {"say": "", "action": ""}
 
-    def _ollama(self, heard: str) -> dict:
+    def _describe(self, model: str, photo: dict, heard: str) -> str:
+        """A plain description of the photo from an Ollama vision model ("" if that fails: the answer is then blind)."""
+        import base64
+        body = {
+            "model": model,
+            "stream": False,
+            "keep_alive": "60m",  # loading it again would take longer than the robot waits for an answer
+            "options": {"temperature": 0.2, "num_predict": 90},
+            "messages": [{"role": "user", "content": DESCRIBE_PROMPT.format(heard=heard[:200]),
+                          "images": [base64.b64encode(photo["jpeg"]).decode("ascii")]}],
+        }
+        req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/chat",
+                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                text = json.loads(r.read().decode("utf-8")).get("message", {}).get("content", "")
+        except (urllib.error.URLError, OSError, ValueError):
+            return ""
+        # Small models like to announce it: "Here's a factual description of the photo:"
+        text = re.sub(r"^\s*here(?:'s| is)[^:\n]{0,60}:\s*", "", text.strip(), flags=re.IGNORECASE)
+        return " ".join(text.split())
+
+    def _ollama(self, heard: str, seen: str = "", blind: str = "") -> dict:
+        """seen: a vision model's description of the robot's photo, for a question about sight."""
+        if not seen and not blind and VISUAL_QUESTION.search(heard):
+            blind = "the camera picture couldn't be read"
         body = {
             "model": self.settings.ollama_model,
             "stream": False,
@@ -499,7 +653,7 @@ class Thinker:
             "options": {"temperature": 0.8},
             "keep_alive": "60m",
             "messages": [{"role": "system", "content": self.system + "\n\nAnswer as JSON: {\"say\": ..., \"action\": ...}"}]
-                        + self._messages(heard),
+                        + self._messages(self._user_turn(heard, None, blind, seen)),
         }
         req = urllib.request.Request(self.settings.ollama_url.rstrip("/") + "/api/chat",
                                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
@@ -509,8 +663,8 @@ class Thinker:
                 data = json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                raise RuntimeError(f"Ollama doesn't have model '{self.settings.ollama_model}' - run: "
-                                   f"ollama pull {self.settings.ollama_model}") from None
+                raise RuntimeError(f"Ollama doesn't have model '{body['model']}' - run: "
+                                   f"ollama pull {body['model']}") from None
             raise RuntimeError(f"Ollama error {e.code}") from None
         except TimeoutError:
             raise RuntimeError("Ollama took too long - it may still be loading the model. Try again in a moment.") from None
@@ -523,6 +677,34 @@ class Thinker:
             return json.loads(content)
         except ValueError:
             return {"say": content, "action": ""}
+
+
+_ollama_caps: dict[str, list[str]] = {}
+# Preferred stand-ins when the chosen model can't see (first installed wins); any other vision model comes after
+VISION_PREFERENCE = ("gemma3", "qwen2.5vl", "llama3.2-vision", "minicpm-v", "llava")
+
+
+def ollama_capabilities(url: str, model: str) -> list[str]:
+    """What an installed Ollama model can do ("completion", "vision", "tools"...), cached; [] if unknown."""
+    key = f"{url}|{model}"
+    if key not in _ollama_caps:
+        try:
+            req = urllib.request.Request(url.rstrip("/") + "/api/show", data=json.dumps({"model": model}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                _ollama_caps[key] = list(json.loads(r.read().decode("utf-8")).get("capabilities") or [])
+        except Exception:  # noqa: BLE001 - unknown: try again next time
+            return []
+    return _ollama_caps[key]
+
+
+def ollama_vision_model(url: str, chosen: str) -> str:
+    """The model to show a photo to: the chosen one if it can see, else an installed vision model, else ""."""
+    if "vision" in ollama_capabilities(url, chosen):
+        return chosen
+    seeing = [m for m in (ollama_models(url) or []) if "vision" in ollama_capabilities(url, m)]
+    seeing.sort(key=lambda m: next((i for i, p in enumerate(VISION_PREFERENCE) if m.startswith(p)), len(VISION_PREFERENCE)))
+    return seeing[0] if seeing else ""
 
 
 def ollama_models(url: str = "http://localhost:11434") -> Optional[list[str]]:
@@ -638,7 +820,7 @@ class BrainServer:
         self.ready = threading.Event()      # set once everything is loaded and primed
         self.problem = ""                    # why warm-up failed ("" = it works)
         self.guide_path = guide_path
-        # ("status", str) | ("turn", Turn) | ("error", str) | ("robot", ip) | ("memory", [notes])
+        # ("status", str) | ("turn", Turn) | ("error", str) | ("robot", ip) | ("memory", [notes]) | ("photo", jpeg)
         self.on_event = on_event
         self.ears = Ears()
         self.thinker: Optional[Thinker] = None
@@ -750,8 +932,17 @@ class BrainServer:
 
     def _memory_loop(self):
         """Every few seconds: a conversation that has gone quiet is over - turn it into notes to remember."""
+        last_warm = time.time()
         while not self._stop.wait(10):
             t = self.thinker
+            # Ollama lets a model go after an hour unused, and loading it again (gemma3: ~35-47 s) outlasts the
+            # robot's wait for an answer: while the brain runs, keep them loaded
+            if t is not None and self.settings.provider == "ollama" and time.time() - last_warm > WARM_EVERY_S:
+                last_warm = time.time()
+                try:
+                    t.keep_warm()
+                except Exception:  # noqa: BLE001 - next time
+                    pass
             if t is None or not self.settings.memory_on:
                 continue
             with t.lock:
@@ -839,14 +1030,28 @@ class BrainServer:
                 send("SAY I heard static. Riveting. Try again.")
                 finish(Turn("", "I heard static…", "", time.time() - t0, **timing))
                 return
+            look = None
+            if fields.get("look") == "1":
+                def look() -> dict:
+                    t = time.time()
+                    try:
+                        photo = self._ask_photo(conn, send)
+                    finally:
+                        timing["look_s"] = time.time() - t
+                    timing["looked"] = f"{photo['w']}x{photo['h']}" if photo.get("jpeg") else photo.get("why", "failed")
+                    if photo.get("jpeg"):
+                        self.on_event("photo", photo["jpeg"])
+                    return photo
             t2 = time.time()
             try:
-                reply = self.thinker.think(heard, conversation=fields.get("conv") == "1")
+                reply = self.thinker.think(heard, conversation=fields.get("conv") == "1", look=look)
             except Exception as e:  # noqa: BLE001
                 send("ERR think_failed")
                 finish(Turn(heard, "", "", time.time() - t0, str(e), think_s=time.time() - t2, **timing))
                 return
-            timing["think_s"] = time.time() - t2
+            timing["think_s"] = time.time() - t2 - timing.get("look_s", 0.0)
+            if reply.get("blind") and not timing.get("looked"):
+                timing["looked"] = reply["blind"]  # a visual question answered without a photo, and why
             if reply["say"]:
                 send(f"SAY {reply['say']}")
             if reply["action"]:
@@ -861,6 +1066,41 @@ class BrainServer:
                 conn.close()
             except OSError:
                 pass
+
+    @staticmethod
+    def _ask_photo(conn: socket.socket, send: Callable[[str], None]) -> dict:
+        """LOOK -> the robot answers "BBIMG bytes=<n> w=<px> h=<px>" + n bytes of JPEG, or "BBIMG bytes=0 why=..."."""
+        old = conn.gettimeout()
+        conn.settimeout(LOOK_LIMIT_S)
+        try:
+            send("LOOK")
+            buf = b""
+            while b"\n" not in buf and len(buf) < 256:
+                chunk = conn.recv(256)
+                if not chunk:
+                    return {"why": "robot_closed"}
+                buf += chunk
+            head, data = buf.split(b"\n", 1)
+            words = head.decode("ascii", "replace").split()
+            if not words or words[0] != "BBIMG":
+                return {"why": "bad_reply"}
+            fields = dict(w.split("=", 1) for w in words[1:] if "=" in w)
+            want = int(fields.get("bytes", "0"))
+            if want <= 0:
+                return {"why": fields.get("why", "no_photo")}
+            if want > 2_000_000:
+                return {"why": "too_big"}
+            data = bytearray(data)
+            while len(data) < want:
+                chunk = conn.recv(min(65536, want - len(data)))
+                if not chunk:
+                    return {"why": "cut_off"}
+                data += chunk
+            return {"jpeg": bytes(data[:want]), "w": int(fields.get("w", "0")), "h": int(fields.get("h", "0"))}
+        except (socket.timeout, OSError, ValueError):
+            return {"why": "timeout"}
+        finally:
+            conn.settimeout(old)
 
     def _log_turn(self, turn: Turn):
         if not self.log_path:

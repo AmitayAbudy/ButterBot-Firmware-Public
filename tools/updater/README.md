@@ -81,6 +81,10 @@ Make the robot yours:
   nudge any other preset (±40 %).
 - **Names** - yours (it greets you by name when it recognises your face) and the robot's; both are used by the AI too.
 - **Start-up line** - what the robot says when it switches on; `{name}` becomes your name.
+- **Summon** - your own lines for when you hold Summon (it starts searching, finds you, can't find you, is charging)
+  and for a tap (what it says before it listens for a voice command; keep those under 35 characters). Separate a few
+  with `|` and it picks one each time. The same card switches the beeps: a chirp when it has heard an AI question and a
+  soft blip while it thinks.
 - **Controller** - the theme (Main, Rose, Red, Blue, or the fork's Portal, Butter, Ice, Mono and Purple; it switches
   straight away), screen brightness and sleep time. Needs the controller plugged in by USB and this release's
   controller firmware.
@@ -156,7 +160,8 @@ Four steps, each with a lamp (NOT SET UP / TO DO / WORKING… / READY / PROBLEM)
 2. **Hearing** - loads [Whisper](https://github.com/SYSTRAN/faster-whisper) on this PC (base.en, about 140 MB,
    downloaded once from Hugging Face - **Source…** can point it at a mirror or a folder instead).
 3. **Thinking** - [Ollama](https://ollama.com), free and local. Install it, run `ollama pull llama3.1:8b` (or
-   `llama3.2` on PCs without a strong graphics card), press **Check**, and **Try it** with a typed message.
+   `llama3.2` on PCs without a strong graphics card), press **Check**, and **Try it** with a typed message. To let the
+   robot see ("what do you see?"), also run `ollama pull gemma3:4b` - **Check** then says *Sees with: gemma3:4b*.
 4. **Turn it on** - **Start AI conversations** starts the brain and, if the robot is plugged in, sets it up to use it.
    The brain warms up (it runs Whisper once and has the model read ButterBot's instructions) before showing READY, so
    the first answer is as quick as the rest. After the first successful conversation it starts by itself whenever
@@ -172,6 +177,16 @@ the chat as context (one-off questions get the last 4). It ends with any button 
 turn on, the robot joins WiFi after you've finished speaking rather than while you talk (the robot's internal memory
 can't hold both for long), so follow-up answers take a second or two longer. Needs this release on both the robot and
 the controller (**Update both** on the Flash tab).
+
+**Seeing** - questions about sight ("what do you see?", "what am I holding?", "what colour is my shirt?", "what is
+that?") make the robot take one photo with its camera before the AI answers. With Ollama, a vision model (your chat
+model if it can see, otherwise an installed one such as `gemma3:4b`) first writes a plain description of the photo and
+your chat model answers in character from it - small models asked to be a butter robot directly "see" butter
+everywhere. With Claude, the model sees the photo itself and can also decide to look on its own. The photo is used for
+that one answer only: it isn't saved or kept in the chat history. The table marks those answers *[looked]* and shows
+the last photo beside it. While the brain runs it keeps both Ollama models loaded, because loading the vision model
+from scratch takes longer than the robot waits for an answer. Photos are 128x128 for now (the robot's internal memory
+is short while WiFi is on).
 
 The **Conversations** table shows what you said, ButterBot's answer, the action, and how long the upload, hearing and
 thinking took. Every conversation is also logged to `%LOCALAPPDATA%\DimensionHopper\brain_log.jsonl`.

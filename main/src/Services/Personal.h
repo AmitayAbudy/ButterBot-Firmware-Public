@@ -1,6 +1,7 @@
 #ifndef BUTTERBOT_FIRMWARE_PERSONAL_H
 #define BUTTERBOT_FIRMWARE_PERSONAL_H
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -16,8 +17,11 @@
  *   the owner's own ramble lines - mixed into the idle rambles
  *   a start-up line    - said when it switches on, instead of the stock one ("{name}" = the owner's name)
  *   chat replies       - the owner's own answer to a chat voice line, by line index (keys "c<index>")
+ *   summon lines       - said instead of the stock Summon lines, by moment (keys "s<index>", see SummonMoment);
+ *                        alternatives separated by "|", one picked at random; "{name}" = the owner's name
+ *   heard/thinking cue - beeps when an AI question has been heard and while the answer comes (key "cue", on unless "0")
  * Loaded once at start-up; changed over USB ("names <hex> <hex>", "ramble add <hex>", "ramble clear",
- * "startline <hex|->", "chat set <index> <hex|->").
+ * "startline <hex|->", "chat set <index> <hex|->", "summon set <index> <hex|->", "cue set <0|1>").
  * Writes must run on an internal-RAM stack (runFlashJob in main.cpp).
  */
 namespace Personal {
@@ -33,6 +37,12 @@ inline std::string robotName;
 inline std::vector<std::string> lines;
 inline std::string startLine;
 inline std::string chatReplies[MaxChat];
+
+/** The Summon moments that can have the owner's own lines (the index is the NVS key "s<index>" and the console's). */
+enum class SummonMoment : uint8_t { Start, Found, NotFound, Charging, Listen, Count }; // Listen: a tap, before a voice command
+inline constexpr size_t MaxSummon = 200; // all alternatives together
+inline std::string summonLines[(size_t) SummonMoment::Count];
+inline std::atomic<bool> cueOn{ true };
 
 inline std::string readStr(nvs_handle_t h, const char* key){
 	size_t len = 0;
@@ -64,6 +74,12 @@ inline void load(){
 		snprintf(key, sizeof(key), "c%u", (unsigned) i);
 		chatReplies[i] = readStr(h, key);
 	}
+	for(size_t i = 0; i < (size_t) SummonMoment::Count; ++i){
+		char key[8];
+		snprintf(key, sizeof(key), "s%u", (unsigned) i);
+		summonLines[i] = readStr(h, key);
+	}
+	cueOn = readStr(h, "cue") != "0";
 	nvs_close(h);
 }
 
@@ -108,6 +124,49 @@ inline bool setChat(size_t index, const std::string& reply){
 	snprintf(key, sizeof(key), "c%u", (unsigned) index);
 	saveKey(key, v);
 	return true;
+}
+
+inline bool setSummon(size_t index, const std::string& lines){
+	if(index >= (size_t) SummonMoment::Count) return false;
+	std::string v = lines.substr(0, MaxSummon);
+	{
+		std::lock_guard<std::mutex> g(lock);
+		summonLines[index] = v;
+	}
+	char key[8];
+	snprintf(key, sizeof(key), "s%u", (unsigned) index);
+	saveKey(key, v);
+	return true;
+}
+
+/** One of the owner's lines for a Summon moment (picked at random, "{name}" filled in), or "" for the stock ones. */
+inline std::string summonText(SummonMoment moment){
+	std::vector<std::string> options;
+	std::string name;
+	{
+		std::lock_guard<std::mutex> g(lock);
+		const std::string& all = summonLines[(size_t) moment];
+		size_t start = 0;
+		while(start <= all.size()){
+			size_t end = all.find('|', start);
+			if(end == std::string::npos) end = all.size();
+			std::string one = all.substr(start, end - start);
+			one.erase(0, one.find_first_not_of(' '));
+			one.erase(one.find_last_not_of(' ') + 1);
+			if(!one.empty()) options.push_back(one);
+			start = end + 1;
+		}
+		name = ownerName.empty() ? std::string("human") : ownerName;
+	}
+	if(options.empty()) return {};
+	std::string s = options[esp_random() % options.size()];
+	for(size_t at; (at = s.find("{name}")) != std::string::npos;) s.replace(at, 6, name);
+	return s;
+}
+
+inline void setCue(bool on){
+	cueOn = on;
+	saveKey("cue", on ? std::string() : std::string("0")); // on is the default: nothing stored
 }
 
 /** The owner's reply to chat line `index`, or "" for the stock one. */

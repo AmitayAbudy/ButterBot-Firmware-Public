@@ -17,6 +17,7 @@
 #include "Services/MotionService.h"
 #include "Services/Com.h"
 #include "FaceDet.h"
+#include "Services/Personal.h"
 
 DEFINE_LOG(SummonEventRoutine)
 
@@ -205,7 +206,18 @@ void SummonEventRoutine::speak(Phrase phrase, SummonData::Phase dataPhase){
 	data.id = static_cast<uint8_t>(id);
 	com->sendData(BB::State::Idle, BB::Action::Idle::Summon, data);
 
-	auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, Phrases::map(phrase, id));
+	// Fork: the owner's own line for this moment (Personalize tab). The controller only shows an animation for
+	// Summon, so it still gets the stock phrase's number.
+	std::string own;
+	switch(phrase){
+		case Phrase::SummonStart: own = Personal::summonText(Personal::SummonMoment::Start); break;
+		case Phrase::SummonFound: own = Personal::summonText(Personal::SummonMoment::Found); break;
+		case Phrase::SummonNotFound: own = Personal::summonText(Personal::SummonMoment::NotFound); break;
+		case Phrase::SummonCharging: own = Personal::summonText(Personal::SummonMoment::Charging); break;
+		default: break;
+	}
+
+	auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, own.empty() ? Phrases::map(phrase, id) : own);
 	audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
 	audio->waitEnd(portMAX_DELAY);
 }
