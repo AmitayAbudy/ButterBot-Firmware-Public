@@ -176,7 +176,7 @@ Four steps, each with a lamp (NOT SET UP / TO DO / WORKING… / READY / PROBLEM)
 
 1. **Robot WiFi** - **Scan** lists the networks the robot can see (2.4 GHz only), pick yours, type the password,
    **Send to robot**, then **Test robot WiFi**. Tick *remember on this PC* to keep the password in Windows Credential
-   Manager. This PC's address is given to the robot so it finds the brain even when the robot and the PC are on
+   Manager (the Keychain on a Mac). This PC's address is given to the robot so it finds the brain even when the robot and the PC are on
    different sub-networks (common with mesh WiFi); it stays hidden on screen unless you tick *show addresses*.
 2. **Hearing** - loads [Whisper](https://github.com/SYSTRAN/faster-whisper) on this PC (base.en, about 140 MB,
    downloaded once from Hugging Face - **Source…** can point it at a mirror or a folder instead).
@@ -210,11 +210,12 @@ from scratch takes longer than the robot waits for an answer. Photos are 128x128
 is short while WiFi is on).
 
 The **Conversations** table shows what you said, ButterBot's answer, the action, and how long the upload, hearing and
-thinking took. Every conversation is also logged to `%LOCALAPPDATA%\DimensionHopper\brain_log.jsonl`.
+thinking took. Every conversation is also logged to `%LOCALAPPDATA%\DimensionHopper\brain_log.jsonl`
+(on a Mac: `~/Library/Application Support/DimensionHopper/brain_log.jsonl`).
 
 Privacy: your voice goes from the robot to this PC over your own network and is turned into text here; with Ollama the
 AI runs here too. Nothing is sent to the internet. The WiFi password goes to the robot over USB and, if you choose,
-into Windows Credential Manager - never into a plain file.
+into Windows Credential Manager or the macOS Keychain - never into a plain file.
 
 ## Troubleshooting
 
