@@ -1781,6 +1781,10 @@ def main():
 
     if "--screenshot" in sys.argv:  # dev aid: render, grab the window, exit
         out = sys.argv[sys.argv.index("--screenshot") + 1]
+        # in front of every other window (an app started from a script doesn't come to the front on a Mac), or the
+        # screen grab shows whatever covers it
+        root.attributes("-topmost", True)
+        root.lift()
 
         def grab():
             from PIL import ImageGrab
