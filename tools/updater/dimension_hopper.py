@@ -21,6 +21,7 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 
 import hopper_core as core
+import mac_compat
 import self_update
 from guide_tab import GuideTab
 from diag_tab import DiagnosticsTab
@@ -51,7 +52,7 @@ DIM = "#5f8a68"
 TEXT = "#d9ffe0"
 WARN = "#ffb627"
 BAD = "#ff4d6d"
-MONO = ("Cascadia Mono", 9) if sys.platform == "win32" else ("Courier", 10)
+MONO = ("Cascadia Mono", 9) if sys.platform in ("win32", "darwin") else ("Courier", 10)  # Menlo on a Mac
 
 QUIPS = {
     "scan": ["Sniffing the USB multiverse...", "Interrogating serial ports. They'll talk.",
@@ -546,7 +547,8 @@ class App:
                 side="left", padx=(10, 6), pady=6)
             var = self.board_vars[kind] = tk.StringVar()
             box = self.board_boxes[kind] = ttk.Combobox(self.board_bar, textvariable=var, state="readonly",
-                                                         style="Hop.TCombobox", width=9)
+                                                         style="Hop.TCombobox",
+                                                         width=9 if sys.platform == "win32" else 20)  # COM7 vs /dev/cu.usbserial-110
             box.pack(side="left", padx=(0, 14))
             box.bind("<<ComboboxSelected>>", lambda e, k=kind: self._board_picked(k))
             tooltip.attach(box, f"Board port: {label}")
@@ -598,7 +600,7 @@ class App:
         self._tab_order_init()
         nb.bind("<<NotebookTabChanged>>", lambda e: self._header_for_tab(), add="+")
         # Keep the window the size it opened at: the header shrinks on most tabs, and the window shouldn't jump
-        root.after(400, lambda: root.geometry(f"{root.winfo_width()}x{root.winfo_height()}"))
+        root.after(400, self._settle_window_size)
 
         # devices
         mid = tk.Frame(flash, bg=BG)
@@ -659,6 +661,24 @@ class App:
             self.log(f"Updated to {APP_TITLE} {VERSION}. Same lab, new tricks.", "hi")
             self.headline.configure(text=f"Updated to {VERSION}. Same lab, new tricks.")
         root.after(1500, lambda: self.check_for_update(manual=False))
+
+    def _settle_window_size(self):
+        """Fixes the window at the size it opened at - but never bigger than the screen (the Diagnostics tab alone
+        asks for ~1570 px, more than a 13-14" laptop has; a window opened at that size hangs off the edge)."""
+        root = self.root
+        w, h = root.winfo_width(), root.winfo_height()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        # leave room for the taskbar, or the Mac's menu bar, title bar and Dock
+        fit_w, fit_h = sw - 16, sh - (110 if sys.platform == "darwin" else 80)
+        if w <= fit_w and h <= fit_h:
+            root.geometry(f"{w}x{h}")
+            return
+        w, h = min(w, fit_w), min(h, fit_h)
+        root.minsize(min(1080, w), min(860, h))
+        if sys.platform == "darwin":
+            root.wm_state("zoomed")  # fills the screen between the menu bar and the Dock, wherever the Dock is
+            return
+        root.geometry(f"{w}x{h}+{(sw - w) // 2}+{30 if sys.platform == 'darwin' else 0}")
 
     # --- widgets ----------------------------------------------------------------------------
     def _style(self):
@@ -882,8 +902,12 @@ class App:
         if u is None:
             return
         if not self_update.can_self_update():
-            self.info("This copy runs from the Python sources, so it can't replace itself - pull the new version "
-                      "with git, or download DimensionHopper.exe from the release page.", "Update")
+            if sys.platform == "darwin" and getattr(sys, "frozen", False):
+                self.info(f"Download {self_update.MAC_ASSET} from the release page, unzip it and drag the new "
+                          "Dimension Hopper over the old one. Your settings and keys stay where they are.", "Update")
+            else:
+                self.info("This copy runs from the Python sources, so it can't replace itself - pull the new "
+                          "version with git, or download Dimension Hopper from the release page.", "Update")
             self._open_update_page()
             return
         if self.busy:
@@ -1744,14 +1768,16 @@ def main():
         _selftest(sys.argv[sys.argv.index("--selftest") + 1])
         return
     _dpi_aware()
+    mac_compat.install()  # before the first widget: fonts, button colours (no-op on Windows)
     root = tk.Tk()
-    try:
-        icon = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "portal.ico"
-        if icon.exists():
-            root.iconbitmap(str(icon))
-    except tk.TclError:
-        pass
-    App(root)
+    assets = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    if sys.platform == "win32":
+        try:
+            root.iconbitmap(str(assets / "portal.ico"))
+        except tk.TclError:
+            pass
+    app = App(root)
+    mac_compat.setup_root(root, on_quit=app._close, icon_png=assets / "portal.png")
 
     if "--screenshot" in sys.argv:  # dev aid: render, grab the window, exit
         out = sys.argv[sys.argv.index("--screenshot") + 1]

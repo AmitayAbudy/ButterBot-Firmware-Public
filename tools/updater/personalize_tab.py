@@ -23,6 +23,7 @@ from tkinter import ttk
 import backup as backup_mod
 import brain
 import hopper_core as core
+import mac_compat
 import tooltip
 from chat_lines import CHAT_LINES
 
@@ -117,7 +118,7 @@ class PersonalizeTab(tk.Frame):
 
         def wheel(e):
             if canvas.yview() != (0.0, 1.0):
-                canvas.yview_scroll(int(-e.delta / 120), "units")
+                canvas.yview_scroll(mac_compat.wheel_steps(e), "units")
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", wheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         self.left = tk.Frame(cols, bg=p["BG"])

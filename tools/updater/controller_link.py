@@ -197,6 +197,9 @@ def bluetooth_available() -> tuple[bool, str]:
         asyncio.run(probe())
     except Exception as e:  # noqa: BLE001 - any failure means no usable adapter
         msg = str(e) or e.__class__.__name__
+        if "unauthorized" in msg.lower() or "denied" in msg.lower():  # macOS: permission not given
+            return False, ("Dimension Hopper isn't allowed to use Bluetooth: System Settings → Privacy & Security → "
+                           "Bluetooth, switch it on, then reopen the app.")
         if "adapter" in msg.lower() or "radio" in msg.lower() or "turned off" in msg.lower():
             return False, "No Bluetooth found on this PC (or it's switched off)."
         return False, f"Bluetooth isn't usable: {msg}"

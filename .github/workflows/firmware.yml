@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Attach a freshly built DimensionHopper.exe to this existing release tag (e.g. v1.1.1-exadon.2); empty = just build it"
+        description: "Attach freshly built Dimension Hopper apps (Windows and Mac) to this existing release tag (e.g. v1.1.1-exadon.2); empty = just build it"
         required: false
         default: ""
       firmware_tag:
@@ -82,7 +82,7 @@ jobs:
           files: ${{ steps.name.outputs.file }}
           generate_release_notes: true
           body: |
-            Flash with **Dimension Hopper** (`DimensionHopper.exe`, attached below): pick "Latest GitHub release" and this repository.
+            Flash with **Dimension Hopper** (`DimensionHopper.exe` for Windows, `DimensionHopper-mac.zip` for Apple-silicon Macs, attached below): pick "Latest GitHub release" and this repository.
             Or manually: `esptool.py -c esp32s3 -b 921600 -p <PORT> write_flash 0 ${{ steps.name.outputs.file }}`
 
       # Manual rebuild of an existing tag: replaces that release's image of the same name; the release text and its
@@ -139,3 +139,31 @@ jobs:
           files: |
             tools/updater/dist/DimensionHopper.exe
             tools/updater/dist/dimensionhopper.json
+
+  # Dimension Hopper for Mac (Apple silicon): an ad-hoc signed .app, zipped, attached to the same release
+  hopper-mac:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build DimensionHopper.app
+        run: bash tools/updater/build_mac.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DimensionHopper-mac.zip
+          path: tools/updater/dist/DimensionHopper-mac.zip
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          overwrite_files: true
+          files: tools/updater/dist/DimensionHopper-mac.zip

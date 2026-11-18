@@ -2,12 +2,33 @@
 
 ![portal](portal.png)
 
-A one-window Windows app for **ButterBot** and its **controller**, with a mad-science look. It updates both boards,
+A one-window app for Windows and Mac for **ButterBot** and its **controller**, with a mad-science look. It updates both boards,
 sets them up, lets you test and drive them, and runs the **AI brain** that gives ButterBot real conversations.
 
 Part of the ButterBot community fork - see the [robot firmware](../../README.md) for the overview and the
 [controller firmware](https://github.com/Exadon/ButterBotCtrl-Firmware-Public).
 Every button has a tooltip: hover over it to see what it does.
+
+### On a Mac
+
+Download `DimensionHopper-mac.zip` from the release (Apple silicon: M1 or newer), unzip it and drag **Dimension
+Hopper** into *Applications*. It isn't notarized by Apple, so the first time macOS says it can't check it: open
+*System Settings → Privacy & Security*, scroll down and press **Open Anyway** (or run
+`xattr -dr com.apple.quarantine /Applications/DimensionHopper.app` once). Everything works as on Windows, with
+these differences:
+
+- Ports are called `/dev/cu.usbserial…` instead of `COM7`.
+- **Flashing is slower.** macOS's built-in driver for the boards' USB chip (CH340) garbles data above 115200 baud,
+  so the app uses 115200 there: a firmware update takes a few minutes, but a full backup of the robot about 25
+  (untick *Back up current firmware first* to skip it; your settings are still saved). With WCH's own CH34x driver
+  installed the port is called `/dev/cu.wchusbserial…` and the app flashes at full speed.
+- Settings, downloads and backups live in `~/Library/Application Support/DimensionHopper` (where this page says
+  `%LOCALAPPDATA%\DimensionHopper`), and saved passwords and keys in the macOS Keychain (where it says Windows
+  Credential Manager).
+- macOS asks once for **Bluetooth** (Controller tab, wireless) and, when you start AI conversations, whether to
+  **accept incoming network connections** - allow both.
+- It doesn't update itself yet: when the bar says a new version is out, **Update now** opens the release page;
+  download the new zip and replace the app (settings stay).
 
 ## Tabs
 
@@ -231,11 +252,27 @@ powershell -ExecutionPolicy Bypass -File build_exe.ps1
 This produces `dist\DimensionHopper.exe`: a single file with no console and no Python needed on the target PC (it's
 large, about 110 MB, because it includes the speech-to-text engine).
 
+## Build the Mac app
+
+```bash
+bash build_mac.sh
+```
+
+This produces `dist/DimensionHopper.app` and `dist/DimensionHopper-mac.zip` (about 95 MB) for the Mac's own
+processor, ad-hoc signed. CI builds it on Apple silicon and attaches the zip to each release.
+
 ## Run from source
 
 ```powershell
 py -3 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python dimension_hopper.py
+```
+
+On a Mac (Python 3.13 from python.org, which brings Tk):
+
+```bash
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python dimension_hopper.py
 ```
 
 Dev flags: `--selftest <out.txt>` checks the bundled esptool, stubs and AI libraries (handy for the windowed exe).
@@ -257,5 +294,7 @@ Dev flags: `--selftest <out.txt>` checks the bundled esptool, stubs and AI libra
 | `gen_phonemes.py` | Makes `phonemes.txt.gz` from the [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) (licence in `CMUDICT_LICENSE`); run by hand. |
 | `self_update.py` | Checks the latest release for a newer Dimension Hopper and swaps the exe in place. |
 | `tooltip.py` | Hover help for every button. |
-| `build_exe.ps1` | Reproducible PyInstaller build. |
+| `mac_compat.py` | Makes the Windows-designed UI look the same on a Mac (fonts, sizes, coloured buttons). |
+| `build_exe.ps1` | Reproducible PyInstaller build (Windows). |
+| `build_mac.sh` | The same for the Mac app. |
 | `make_art.py` | Regenerates the art: `portal.ico`/`portal.png` (app icon), `bot.png` and `controller.png` (slot icons). |

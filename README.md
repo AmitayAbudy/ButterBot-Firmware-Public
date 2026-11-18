@@ -9,7 +9,7 @@ This fork is one of three pieces that work together:
 |---|---|---|
 | **Robot firmware** | ButterBot itself: voice, driving, AI conversations | this repository |
 | **Controller firmware** | The handheld remote | [Exadon/ButterBotCtrl-Firmware-Public](https://github.com/Exadon/ButterBotCtrl-Firmware-Public) |
-| **Dimension Hopper** | A Windows app that updates both boards, sets them up and runs the AI "brain" | [tools/updater](tools/updater) in this repository |
+| **Dimension Hopper** | A Windows and Mac app that updates both boards, sets them up and runs the AI "brain" | [tools/updater](tools/updater) in this repository |
 
 ## See it in action
 
@@ -21,7 +21,7 @@ This fork is one of three pieces that work together:
 
 ## Quick start
 
-1. Download `DimensionHopper.exe` from the [releases page](../../releases) (or build it, see [tools/updater](tools/updater)).
+1. Download `DimensionHopper.exe` (Windows) or `DimensionHopper-mac.zip` (Mac) from the [releases page](../../releases) (or build it, see [tools/updater](tools/updater)).
 2. Plug the robot in by USB, switch it on (hold the power button about 1 second) and press **Scan dimensions**.
 3. Under **Payload**, keep *Latest GitHub release* and check the **Repo** box says `Exadon/ButterBot-Firmware-Public`
    with a green **FORK** badge (the controller: `Exadon/ButterBotCtrl-Firmware-Public`). That's the default; if it shows

@@ -263,13 +263,9 @@ MEMORY_SCHEMA = {
 
 
 def _short(path: str) -> str:
-    """No Windows user name on screen (people post screenshots)."""
-    import os
-    for var in ("LOCALAPPDATA", "APPDATA", "USERPROFILE"):
-        base = os.environ.get(var)
-        if base and path.lower().startswith(base.lower()):
-            return f"%{var}%" + path[len(base):]
-    return path
+    """No user name on screen (people post screenshots)."""
+    import hopper_core
+    return hopper_core.short_path(path)
 
 
 def _words(text: str) -> set[str]:

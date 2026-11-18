@@ -330,11 +330,17 @@ class DiagnosticsTab(tk.Frame):
     CAM_RETRY_S = 1.0      # after "busy" (a routine is using the camera)
     CAM_TIMEOUT_S = 6.0    # no reply: ask again
 
+    def _narrow(self) -> bool:
+        """A 13-14" laptop screen: the full-size tab (~1570 px) would be wider than the window can be."""
+        return self.winfo_screenwidth() < 1600
+
     def _build_camera(self, f):
         p = self.pal
         tk.Label(f, text="CAMERA", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).pack(anchor="w",
                                                                                                    pady=(6, 0))
-        size = 128 * self.CAM_SCALE
+        if self._narrow():  # smaller previews, Save buttons on their own row
+            self.CAM_SCALE = self.SCR_SCALE = 1.25
+        size = round(128 * self.CAM_SCALE)
         box = tk.Frame(f, bg="#040705", width=size, height=size)  # fixed pixel size, picture or not
         box.pack(pady=(4, 4))
         box.pack_propagate(False)
@@ -344,7 +350,11 @@ class DiagnosticsTab(tk.Frame):
         row.pack(fill="x", pady=(0, 4))
         self.cam_btn = self.app.button(row, "▶ Start camera", self.toggle_camera, small=True)
         self.cam_btn.pack(side="left")
-        self.app.button(row, "Save snapshot…", self.save_snapshot, small=True).pack(side="left", padx=6)
+        if self._narrow():
+            row = tk.Frame(f, bg=p["PANEL"])
+            row.pack(fill="x", pady=(0, 4))
+        self.app.button(row, "Save snapshot…", self.save_snapshot, small=True).pack(
+            side="left", padx=0 if self._narrow() else 6)
         self.cam_status = tk.Label(f, text="Shows what the robot sees, while it's idle. About 1-2 frames a second.",
                                    bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), anchor="w", justify="left",
                                    wraplength=size)
@@ -396,7 +406,7 @@ class DiagnosticsTab(tk.Frame):
                 data = base64.b64decode(fields["jpg"])
                 img = Image.open(io.BytesIO(data))
                 img.load()
-                size = 128 * self.CAM_SCALE
+                size = round(128 * self.CAM_SCALE)
                 self.cam_photo = ImageTk.PhotoImage(img.resize((size, size), Image.BILINEAR))
                 self.cam_img_lbl.configure(image=self.cam_photo, text="")
                 self.cam_jpeg = data
@@ -448,7 +458,7 @@ class DiagnosticsTab(tk.Frame):
         p = self.pal
         tk.Label(f, text="SCREEN", bg=p["PANEL"], fg=p["GREEN"], font=("Segoe UI Black", 10)).pack(anchor="w",
                                                                                                    pady=(6, 0))
-        size = self.SCR_W * self.SCR_SCALE
+        size = round(self.SCR_W * self.SCR_SCALE)
         box = tk.Frame(f, bg="#040705", width=size, height=size)
         box.pack(pady=(4, 4))
         box.pack_propagate(False)
@@ -458,7 +468,11 @@ class DiagnosticsTab(tk.Frame):
         row.pack(fill="x", pady=(0, 4))
         self.scr_btn = self.app.button(row, "▶ Mirror screen", self.toggle_screen, small=True)
         self.scr_btn.pack(side="left")
-        self.app.button(row, "Save screenshot…", self.save_screenshot, small=True).pack(side="left", padx=6)
+        if self._narrow():
+            row = tk.Frame(f, bg=p["PANEL"])
+            row.pack(fill="x", pady=(0, 4))
+        self.app.button(row, "Save screenshot…", self.save_screenshot, small=True).pack(
+            side="left", padx=0 if self._narrow() else 6)
         self.scr_status = tk.Label(f, text="Shows exactly what the controller's screen shows, live.",
                                    bg=p["PANEL"], fg=p["DIM"], font=("Segoe UI", 8), anchor="w", justify="left",
                                    wraplength=size)
@@ -569,7 +583,7 @@ class DiagnosticsTab(tk.Frame):
             if rows:
                 from PIL import Image, ImageTk
                 img = Image.frombytes("RGB", (w, h), bytes(rgb))
-                size = w * self.SCR_SCALE
+                size = round(w * self.SCR_SCALE)
                 self.scr_photo = ImageTk.PhotoImage(img.resize((size, size), Image.NEAREST))
                 self.scr_img_lbl.configure(image=self.scr_photo, text="")
                 self.scr_updates = [t for t in self.scr_updates if now - t < 5] + [now]
